@@ -161,3 +161,167 @@ test('without GOOGLE_SHEETS_WEBHOOK_URL the booking flow is byte-for-byte unchan
   assert.equal(body.provider, 'resend');
   assert.equal(body.logged, false);
 });
+
+/* ------------------------------------------------------------------ */
+/* silent-failure protection                                           */
+/*                                                                     */
+/* A Google Apps Script web app answers HTTP 200 for almost everything,*/
+/* including the cases where it wrote nothing. These tests pin down    */
+/* that we no longer report those as a success.                        */
+/* ------------------------------------------------------------------ */
+
+import {
+  interpretSheetResponse,
+  inspectWebhookUrl,
+  redactWebhookUrl,
+  fingerprint,
+  pingSheet,
+} from '../server/sheetLogger.mjs';
+import { describeConfiguration, summarise, handleBookingHealthRequest } from '../server/bookingHealth.mjs';
+
+const EXEC = 'https://script.google.com/macros/s/AKfycbxDEMO1234567890/exec';
+
+test('a rejected secret is reported as a failure, not a success', async () => {
+  const result = await logBookingToSheet({
+    booking: BOOKING,
+    env: { GOOGLE_SHEETS_WEBHOOK_URL: EXEC, GOOGLE_SHEETS_SECRET: 'wrong' },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: false, error: 'Invalid secret.' }),
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Invalid secret/);
+  assert.match(result.hint, /GOOGLE_SHEETS_SECRET/);
+});
+
+test('a Google sign-in page is reported as a failure, not a success', async () => {
+  const result = await logBookingToSheet({
+    booking: BOOKING,
+    env: { GOOGLE_SHEETS_WEBHOOK_URL: EXEC },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => '<!DOCTYPE html><html><head><title>Sign in - Google Accounts</title></head></html>',
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /sign-in page/i);
+  assert.match(result.hint, /Anyone/);
+});
+
+test('an explicit ok:true from the script is a success', async () => {
+  const result = await logBookingToSheet({
+    booking: BOOKING,
+    env: { GOOGLE_SHEETS_WEBHOOK_URL: EXEC },
+    fetchImpl: async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: true, rowNumber: 7 }) }),
+  });
+  assert.equal(result.ok, true);
+});
+
+test('a /dev URL is rejected up front instead of timing out', async () => {
+  let called = 0;
+  const result = await logBookingToSheet({
+    booking: BOOKING,
+    env: { GOOGLE_SHEETS_WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbxDEMO/dev' },
+    fetchImpl: async () => {
+      called += 1;
+      return { ok: true, status: 200, text: async () => '{"ok":true}' };
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(called, 0);
+  assert.match(result.error, /\/dev/);
+});
+
+test('inspectWebhookUrl catches the URLs that cannot possibly work', () => {
+  assert.equal(inspectWebhookUrl(EXEC).ok, true);
+  assert.equal(inspectWebhookUrl('').ok, false);
+  assert.equal(inspectWebhookUrl('not a url').ok, false);
+  assert.match(inspectWebhookUrl('https://script.google.com/macros/s/a/dev').problems.join(' '), /\/dev/);
+  assert.match(
+    inspectWebhookUrl('https://script.google.com/macros/s/a/edit').problems.join(' '),
+    /does not end in \/exec/
+  );
+});
+
+test('a transient 5xx is retried once', async () => {
+  let calls = 0;
+  const result = await logBookingToSheet({
+    booking: BOOKING,
+    env: { GOOGLE_SHEETS_WEBHOOK_URL: EXEC },
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return { ok: false, status: 503, text: async () => 'temporarily unavailable' };
+      return { ok: true, status: 200, text: async () => '{"ok":true}' };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.ok, true);
+});
+
+test('the webhook URL is redacted and the secret is never exposed', () => {
+  const redacted = redactWebhookUrl(EXEC);
+  assert.ok(!redacted.includes('AKfycbxDEMO1234567890'));
+  const config = describeConfiguration({ GOOGLE_SHEETS_WEBHOOK_URL: EXEC, GOOGLE_SHEETS_SECRET: 'super-secret' });
+  const serialised = JSON.stringify(config);
+  assert.ok(!serialised.includes('super-secret'));
+  assert.equal(config.sheetLogging.GOOGLE_SHEETS_SECRET.fingerprint, fingerprint('super-secret'));
+});
+
+test('fingerprints match only for identical secrets', () => {
+  assert.equal(fingerprint('abc'), fingerprint('abc'));
+  assert.notEqual(fingerprint('abc'), fingerprint('abc '));
+  assert.equal(fingerprint(''), 'none');
+});
+
+test('pingSheet does not write a row when the script understands ping mode', async () => {
+  let sent = null;
+  const result = await pingSheet({
+    env: { GOOGLE_SHEETS_WEBHOOK_URL: EXEC, GOOGLE_SHEETS_SECRET: 'shh' },
+    fetchImpl: async (url, init) => {
+      sent = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, mode: 'ping', dataRows: 12 }) };
+    },
+  });
+  assert.equal(sent.mode, 'ping');
+  assert.equal(result.ok, true);
+  assert.equal(result.script.dataRows, 12);
+});
+
+/* ------------------------------------------------------------------ */
+/* /api/booking-health                                                 */
+/* ------------------------------------------------------------------ */
+
+test('health endpoint flags a host with no webhook configured', async () => {
+  const res = await handleBookingHealthRequest({ httpMethod: 'GET' }, { env: {} });
+  const body = JSON.parse(res.body);
+  assert.equal(res.statusCode, 200);
+  assert.equal(body.verdict.status, 'not-configured');
+  assert.match(body.verdict.nextAction, /Redeploy/i);
+});
+
+test('health endpoint reports a healthy pipeline after a successful self-test', async () => {
+  const res = await handleBookingHealthRequest(
+    { httpMethod: 'GET', queryStringParameters: { selftest: '1' } },
+    {
+      env: { GOOGLE_SHEETS_WEBHOOK_URL: EXEC, GOOGLE_SHEETS_SECRET: 'shh' },
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ ok: true, mode: 'ping', secretFingerprint: fingerprint('shh') }),
+      }),
+    }
+  );
+  const body = JSON.parse(res.body);
+  assert.equal(body.verdict.status, 'healthy');
+  assert.equal(body.selftest.ok, true);
+});
+
+test('summarise explains a mismatched secret in plain English', () => {
+  const config = describeConfiguration({ GOOGLE_SHEETS_WEBHOOK_URL: EXEC, GOOGLE_SHEETS_SECRET: 'a' });
+  const verdict = summarise(config, { attempted: true, ok: false, reason: 'Invalid secret.', hint: 'Compare fingerprints.' });
+  assert.equal(verdict.status, 'broken');
+  assert.match(verdict.headline, /Invalid secret/);
+});

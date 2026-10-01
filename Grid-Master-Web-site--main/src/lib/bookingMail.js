@@ -230,6 +230,13 @@ export async function deliverViaServerRelay(payload, options = {}) {
   }
 
   let lastMessage = '';
+  // `true` as soon as any endpoint answers with our own JSON, which proves the
+  // backend function is deployed on this host. That matters beyond e-mail: the
+  // backend is also what appends the booking to the owner's Google Sheet, so a
+  // host that answers 501 ("no mail provider") must still be called on every
+  // future booking in this session — never remembered as "disabled".
+  let relayExists = false;
+
   for (const endpoint of endpoints) {
     let res;
     try {
@@ -247,6 +254,10 @@ export async function deliverViaServerRelay(payload, options = {}) {
     // A static host answers the SPA fallback (HTTP 200 + index.html) for
     // unknown paths, so a 200 that is not our JSON counts as "no relay here".
     if (res.status === 404 || res.status === 405 || res.status === 501 || (res.status === 200 && !res.validJson)) {
+      // 501 is our own function answering "no mail provider configured" — the
+      // relay very much exists, and it has already logged the booking to the
+      // Google Sheet. Only a 404/405/HTML answer means "not deployed here".
+      if (res.status === 501 || res.validJson) relayExists = true;
       lastMessage = text(res.json?.error) || `HTTP ${res.status}`;
       continue;
     }
@@ -262,13 +273,16 @@ export async function deliverViaServerRelay(payload, options = {}) {
       };
     }
     if (res.status === 501) {
+      relayExists = true;
       lastMessage = text(res.json?.error) || 'No mail provider configured on this host.';
       continue;
     }
+    if (res.validJson) relayExists = true;
     lastMessage = text(res.json?.error) || text(res.json?.message) || `HTTP ${res.status}`;
   }
 
-  rememberRelayDisabled(storage);
+  // Only stop probing when the backend is genuinely absent from this host.
+  if (!relayExists) rememberRelayDisabled(storage);
   return { ok: false, state: DELIVERY.FAILED, channel: 'server', skipped: true, message: lastMessage };
 }
 
