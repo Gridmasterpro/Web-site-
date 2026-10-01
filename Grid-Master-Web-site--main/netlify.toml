@@ -12,6 +12,12 @@ functions = "netlify/functions"
   to = "/.netlify/functions/booking"
   status = 200
 
+# Read-only diagnosis of the booking → Google Sheet pipeline.
+[[redirects]]
+  from = "/api/booking-health"
+  to = "/.netlify/functions/booking-health"
+  status = 200
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

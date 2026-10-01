@@ -389,3 +389,48 @@ test('a static host answering HTML (SPA fallback) is treated as "no relay here"'
   assert.equal(result.channel, 'formsubmit');
   assert.ok(urls.some((u) => u.includes('formsubmit.co')));
 });
+
+/* ------------------------------------------------------------------ */
+/* the backend must keep being called — it is what fills the Sheet     */
+/* ------------------------------------------------------------------ */
+
+test('a 501 from our own backend does NOT disable the relay for the session', async () => {
+  // 501 means "this host has no mail provider", but the function IS deployed
+  // and it has already appended the booking to the Google Sheet. Skipping it
+  // on the next booking would silently stop the sheet from being updated.
+  const storage = makeStorage();
+  const fetchImpl = async (url) => (url.includes('formsubmit.co') ? formsubmitSuccess() : notConfigured());
+
+  const payload = buildBookingPayload(FIELDS, { reference: 'GM-SR-501', inbox: INBOX });
+  await deliverBooking(payload, { fetchImpl, inbox: INBOX, storage, online: true });
+
+  assert.equal(storage.getItem(RELAY_PROBE_KEY), null);
+
+  // Second booking in the same session must hit the backend again.
+  const urls = [];
+  const fetchImpl2 = async (url) => {
+    urls.push(url);
+    return url.includes('formsubmit.co') ? formsubmitSuccess() : notConfigured();
+  };
+  await deliverBooking(buildBookingPayload(FIELDS, { reference: 'GM-SR-502', inbox: INBOX }), {
+    fetchImpl: fetchImpl2,
+    inbox: INBOX,
+    storage,
+    online: true,
+  });
+  assert.ok(urls.includes('/api/booking'), 'the backend must be called for every booking');
+});
+
+test('a host with no backend at all is still remembered as disabled', async () => {
+  const storage = makeStorage();
+  // Static host: unknown paths return the SPA shell (HTTP 200 + HTML).
+  const fetchImpl = async (url) =>
+    url.includes('formsubmit.co')
+      ? formsubmitSuccess()
+      : { status: 200, ok: true, text: async () => '<!doctype html><html></html>' };
+
+  const payload = buildBookingPayload(FIELDS, { reference: 'GM-SR-503', inbox: INBOX });
+  await deliverBooking(payload, { fetchImpl, inbox: INBOX, storage, online: true });
+
+  assert.equal(storage.getItem(RELAY_PROBE_KEY), 'disabled');
+});

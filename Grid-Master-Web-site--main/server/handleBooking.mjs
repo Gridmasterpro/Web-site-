@@ -104,6 +104,7 @@ export async function handleBookingRequest(event, { env = {}, fetchImpl } = {}) 
       success: false,
       configured: false,
       logged: Boolean(sheetResult?.ok),
+      ...sheetDiagnostics(sheetResult),
       error: 'No mail provider configured on this host — use the FormSubmit relay or set MAIL_* variables.',
     });
   }
@@ -119,6 +120,7 @@ export async function handleBookingRequest(event, { env = {}, fetchImpl } = {}) 
       provider: mailResult.provider,
       to: mailResult.to || provider.to,
       logged: Boolean(sheetResult?.ok),
+      ...sheetDiagnostics(sheetResult),
       message: `Booking e-mailed from the ${mailResult.provider} relay.`,
     });
   }
@@ -126,12 +128,29 @@ export async function handleBookingRequest(event, { env = {}, fetchImpl } = {}) 
     success: false,
     provider: mailResult.provider,
     logged: Boolean(sheetResult?.ok),
+    ...sheetDiagnostics(sheetResult),
     error: mailResult.error || 'The mail provider refused the booking.',
   });
 }
 
 function sheetPromiseEnvConfigured(env) {
   return Boolean(String(env?.GOOGLE_SHEETS_WEBHOOK_URL || '').trim());
+}
+
+/**
+ * Surface *why* a sheet write failed, so the reason is visible in the browser's
+ * Network tab instead of being swallowed. Only added when the logger is
+ * configured and actually failed — a healthy or disabled logger adds nothing,
+ * which keeps the response identical to before for every normal visitor.
+ *
+ * Never contains a secret: `sheetLogger` only ever returns descriptions.
+ */
+function sheetDiagnostics(sheetResult) {
+  if (!sheetResult || sheetResult.ok || !sheetResult.configured) return {};
+  const out = { logError: sheetResult.error };
+  if (sheetResult.hint) out.logHint = sheetResult.hint;
+  out.logHelp = 'Open /api/booking-health?selftest=1 for a full diagnosis.';
+  return out;
 }
 
 export default handleBookingRequest;
