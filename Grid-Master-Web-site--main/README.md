@@ -52,6 +52,13 @@ Netlify (`netlify.toml`, `public/_redirects`) and Vercel (`vercel.json`). For a 
 > it explains the one-time FormSubmit activation, the permanent own-provider setup
 > (`.env.example`), and how to recover bookings FormSubmit received but never delivered.
 
+> **Want every customer who books tracked automatically in a spreadsheet?**
+> See [`docs/customer-bookings-sheet-setup.md`](docs/customer-bookings-sheet-setup.md) — a
+> backend-only addition that appends each booking (name, phone, email, property address,
+> service, date/time, notes) as a row in a Google Sheet you own, downloadable any time as a
+> real `.xlsx` file. It runs independently of the e-mail relay above and never touches the
+> booking form, the confirmation screen, or any other part of the website.
+
 ### 5. 📐 Designing Samples & CAD Blueprint Viewer
 - Residential and commercial case-study portfolio with filters.
 - **Inspect CAD Blueprint modal**: technical spec tables, generation & CO₂ metrics, and engineering sign-off by **GANDHAMANENI GOUTHAM** and **Ashish Kumar**.
