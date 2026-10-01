@@ -11,6 +11,7 @@
  */
 
 import { sendBookingMail, resolveProvider } from './mailProvider.mjs';
+import { logBookingToSheet } from './sheetLogger.mjs';
 
 const MAX_BODY_BYTES = 32 * 1024;
 const WINDOW_MS = 60 * 60 * 1000;
@@ -68,15 +69,6 @@ export async function handleBookingRequest(event, { env = {}, fetchImpl } = {}) 
   const method = (event.httpMethod || event.method || 'POST').toUpperCase();
   if (method !== 'POST') return json(405, { success: false, error: 'Use POST for booking submissions.' });
 
-  const provider = resolveProvider(env);
-  if (!provider.configured) {
-    return json(501, {
-      success: false,
-      configured: false,
-      error: 'No mail provider configured on this host — use the FormSubmit relay or set MAIL_* variables.',
-    });
-  }
-
   const rawBody = event.body || '';
   if (rawBody.length > MAX_BODY_BYTES) return json(413, { success: false, error: 'Booking payload too large.' });
 
@@ -95,16 +87,51 @@ export async function handleBookingRequest(event, { env = {}, fetchImpl } = {}) 
     return json(429, { success: false, error: 'Too many booking mails from this network. Please try again later.' });
   }
 
-  const result = await sendBookingMail({ booking, env, fetchImpl });
-  if (result.ok) {
-    return json(200, {
-      success: true,
-      provider: result.provider,
-      to: result.to || provider.to,
-      message: `Booking e-mailed from the ${result.provider} relay.`,
+  // Log every validated booking to the owner's Google Sheet (if configured),
+  // independently of whether a mail provider is set up. This never changes
+  // the HTTP status or body shape the browser expects — a sheet failure is
+  // swallowed here and only the `logged` flag reflects it.
+  const sheetPromise = logBookingToSheet({ booking, env, fetchImpl, clientIp: clientIp(event) }).catch((error) => ({
+    configured: sheetPromiseEnvConfigured(env),
+    ok: false,
+    error: error?.message || String(error),
+  }));
+
+  const provider = resolveProvider(env);
+  if (!provider.configured) {
+    const sheetResult = await sheetPromise;
+    return json(501, {
+      success: false,
+      configured: false,
+      logged: Boolean(sheetResult?.ok),
+      error: 'No mail provider configured on this host — use the FormSubmit relay or set MAIL_* variables.',
     });
   }
-  return json(502, { success: false, provider: result.provider, error: result.error || 'The mail provider refused the booking.' });
+
+  const [mailResult, sheetResult] = await Promise.all([
+    sendBookingMail({ booking, env, fetchImpl }),
+    sheetPromise,
+  ]);
+
+  if (mailResult.ok) {
+    return json(200, {
+      success: true,
+      provider: mailResult.provider,
+      to: mailResult.to || provider.to,
+      logged: Boolean(sheetResult?.ok),
+      message: `Booking e-mailed from the ${mailResult.provider} relay.`,
+    });
+  }
+  return json(502, {
+    success: false,
+    provider: mailResult.provider,
+    logged: Boolean(sheetResult?.ok),
+    error: mailResult.error || 'The mail provider refused the booking.',
+  });
+}
+
+function sheetPromiseEnvConfigured(env) {
+  return Boolean(String(env?.GOOGLE_SHEETS_WEBHOOK_URL || '').trim());
 }
 
 export default handleBookingRequest;
