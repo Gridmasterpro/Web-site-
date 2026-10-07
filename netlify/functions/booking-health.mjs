@@ -6,7 +6,7 @@
  * on both hosts.
  */
 
-import { handleBookingHealthRequest } from '../../server/bookingHealth.mjs';
+import { handleBookingHealthRequest } from '../../backend/bookingHealth.mjs';
 
 export async function handler(event) {
   const result = await handleBookingHealthRequest(event, { env: process.env });

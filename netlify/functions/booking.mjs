@@ -6,7 +6,7 @@
  * company's own mail provider.
  */
 
-import { handleBookingRequest } from '../../server/handleBooking.mjs';
+import { handleBookingRequest } from '../../backend/handleBooking.mjs';
 
 export async function handler(event) {
   const result = await handleBookingRequest(event, { env: process.env });

@@ -153,7 +153,7 @@ test('a queued booking is re-sent automatically and the queue is cleared', async
     ])
   );
 
-  const { drainQueue } = await import('../../src/lib/bookingMail.js');
+  const { drainQueue } = await import('../../frontend/lib/bookingMail.js');
   const result = await drainQueue({
     storage: app.window.localStorage,
     fetchImpl: globalThis.fetch,

@@ -7,7 +7,7 @@
  * `501 {configured:false}` and the site falls back to FormSubmit on its own.
  */
 
-import { handleBookingRequest } from '../server/handleBooking.mjs';
+import { handleBookingRequest } from '../backend/handleBooking.mjs';
 
 export default async function handler(req, res) {
   const body =

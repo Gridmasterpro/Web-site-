@@ -12,8 +12,8 @@ import {
   resolveProvider,
   sendBookingMail,
   extractError,
-} from '../server/mailProvider.mjs';
-import { handleBookingRequest, validateBooking } from '../server/handleBooking.mjs';
+} from '../backend/mailProvider.mjs';
+import { handleBookingRequest, validateBooking } from '../backend/handleBooking.mjs';
 
 const BOOKING = {
   booking_reference: 'GM-SR-424242',

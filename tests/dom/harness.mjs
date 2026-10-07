@@ -1,7 +1,7 @@
 /**
  * jsdom + esbuild harness for the booking form integration test.
  *
- * esbuild (a dependency of Vite) transpiles the real `src/App.jsx` tree, jsdom
+ * esbuild (a dependency of Vite) transpiles the real `frontend/App.jsx` tree, jsdom
  * provides the browser globals, and every network call is intercepted so the
  * test can assert exactly what the booking form puts on the wire.
  */

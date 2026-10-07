@@ -7,8 +7,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bookingToRow, sheetLoggingConfigured, logBookingToSheet } from '../server/sheetLogger.mjs';
-import { handleBookingRequest } from '../server/handleBooking.mjs';
+import { bookingToRow, sheetLoggingConfigured, logBookingToSheet } from '../backend/sheetLogger.mjs';
+import { handleBookingRequest } from '../backend/handleBooking.mjs';
 
 const BOOKING = {
   booking_reference: 'GM-SR-555555',
@@ -176,8 +176,8 @@ import {
   redactWebhookUrl,
   fingerprint,
   pingSheet,
-} from '../server/sheetLogger.mjs';
-import { describeConfiguration, summarise, handleBookingHealthRequest } from '../server/bookingHealth.mjs';
+} from '../backend/sheetLogger.mjs';
+import { describeConfiguration, summarise, handleBookingHealthRequest } from '../backend/bookingHealth.mjs';
 
 const EXEC = 'https://script.google.com/macros/s/AKfycbxDEMO1234567890/exec';
 

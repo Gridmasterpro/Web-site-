@@ -28,7 +28,7 @@ import {
   makeReference,
   QUEUE_KEY,
   RELAY_PROBE_KEY,
-} from '../src/lib/bookingMail.js';
+} from '../frontend/lib/bookingMail.js';
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                             */

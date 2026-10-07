@@ -9,7 +9,7 @@
  * used to confirm that Vercel and Apps Script hold the same value.
  */
 
-import { handleBookingHealthRequest } from '../server/bookingHealth.mjs';
+import { handleBookingHealthRequest } from '../backend/bookingHealth.mjs';
 
 export default async function handler(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers?.host || 'localhost'}`);
