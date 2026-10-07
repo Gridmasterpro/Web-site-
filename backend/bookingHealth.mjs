@@ -259,6 +259,13 @@ export async function handleBookingHealthRequest(event, { env = {}, fetchImpl } 
   return json(200, {
     service: 'Grid Master booking backend',
     checkedAt: new Date().toISOString(),
+    // Which build answers this URL — invaluable when juggling preview URLs:
+    // a change of environment variables only ever reaches a NEW deployment,
+    // so the commit shown here must be at least as new as the variable edit.
+    deployment: {
+      environment: asText(env.VERCEL_ENV).trim() || 'unknown',
+      commit: asText(env.VERCEL_GIT_COMMIT_SHA).trim().slice(0, 7) || 'unknown',
+    },
     verdict,
     configuration,
     selftest,

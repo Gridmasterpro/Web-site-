@@ -387,3 +387,12 @@ test('mailtest is skipped honestly for providers without a read-only check', asy
   assert.equal(result.provider, 'none');
   assert.equal(result.attempted, false);
 });
+
+test('health endpoint reports which deployment and commit is answering', async () => {
+  const res = await handleBookingHealthRequest(
+    { httpMethod: 'GET' },
+    { env: { VERCEL_ENV: 'preview', VERCEL_GIT_COMMIT_SHA: 'abcdef1234567890' } }
+  );
+  const body = JSON.parse(res.body);
+  assert.deepEqual(body.deployment, { environment: 'preview', commit: 'abcdef1' });
+});
