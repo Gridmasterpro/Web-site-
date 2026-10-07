@@ -177,7 +177,7 @@ import {
   fingerprint,
   pingSheet,
 } from '../backend/sheetLogger.mjs';
-import { describeConfiguration, summarise, handleBookingHealthRequest } from '../backend/bookingHealth.mjs';
+import { describeConfiguration, summarise, handleBookingHealthRequest, pingMailProvider } from '../backend/bookingHealth.mjs';
 
 const EXEC = 'https://script.google.com/macros/s/AKfycbxDEMO1234567890/exec';
 
@@ -324,4 +324,66 @@ test('summarise explains a mismatched secret in plain English', () => {
   const verdict = summarise(config, { attempted: true, ok: false, reason: 'Invalid secret.', hint: 'Compare fingerprints.' });
   assert.equal(verdict.status, 'broken');
   assert.match(verdict.headline, /Invalid secret/);
+});
+
+/* ------------------------------------------------------------------ */
+/* /api/booking-health — mail relay diagnostics                        */
+/* ------------------------------------------------------------------ */
+
+test('health endpoint reports the mail relay, its addresses and a masked key', () => {
+  const config = describeConfiguration({
+    BREVO_API_KEY: 'xkeysib-secret-1234',
+    MAIL_FROM: 'Grid Master Solar Systems <contactgridmaster@gmail.com>',
+    MAIL_TO: 'contactgridmaster@gmail.com',
+  });
+
+  assert.equal(config.mailRelay.configured, true);
+  assert.equal(config.mailRelay.provider, 'brevo');
+  assert.equal(config.mailRelay.from, 'Grid Master Solar Systems <contactgridmaster@gmail.com>');
+  assert.equal(config.mailRelay.to, 'contactgridmaster@gmail.com');
+  assert.equal(config.mailRelay.customerConfirmation, 'on');
+  assert.equal(config.mailRelay.providerKey.variable, 'BREVO_API_KEY');
+  assert.equal(config.mailRelay.providerKey.set, true);
+  assert.equal(config.mailRelay.providerKey.tail, '…1234');
+  // The full key must never appear anywhere in the report.
+  assert.ok(!JSON.stringify(config).includes('xkeysib-secret-1234'));
+});
+
+test('health endpoint says "none" when no mail provider is configured', () => {
+  const config = describeConfiguration({});
+  assert.equal(config.mailRelay.configured, false);
+  assert.equal(config.mailRelay.provider, 'none');
+  assert.equal(config.mailRelay.providerKey.set, false);
+});
+
+test('?mailtest=1 pings Brevo read-only and confirms a valid key', async () => {
+  const captured = [];
+  const result = await pingMailProvider({
+    env: { BREVO_API_KEY: 'xkeysib-good' },
+    fetchImpl: async (url, init) => {
+      captured.push({ url, init });
+      return { ok: true, status: 200, text: async () => '{"email":"owner@grid.example"}' };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.provider, 'brevo');
+  assert.equal(result.accountEmail, 'owner@grid.example');
+  assert.equal(captured[0].url, 'https://api.brevo.com/v3/account');
+  assert.equal(captured[0].init.headers['api-key'], 'xkeysib-good');
+});
+
+test('?mailtest=1 explains a refused key in plain English', async () => {
+  const result = await pingMailProvider({
+    env: { BREVO_API_KEY: 'xkeysib-bad' },
+    fetchImpl: async () => ({ ok: false, status: 401, text: async () => '{"message":"Key not found"}' }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /refused|regenerate/i);
+});
+
+test('mailtest is skipped honestly for providers without a read-only check', async () => {
+  const result = await pingMailProvider({ env: {}, fetchImpl: async () => { throw new Error('must not be called'); } });
+  assert.equal(result.provider, 'none');
+  assert.equal(result.attempted, false);
 });
