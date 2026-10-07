@@ -176,7 +176,13 @@ test('POST /api/booking sends the mail when a provider is configured', async () 
   const body = JSON.parse(res.body);
   assert.equal(body.success, true);
   assert.equal(body.provider, 'resend');
-  assert.equal(captured.length, 1);
+  // Two provider calls: the company notification AND the customer's
+  // thank-you confirmation with the PDF receipt attached.
+  assert.equal(captured.length, 2);
+  const recipients = captured.map((call) => JSON.parse(call.init.body).to?.[0]).sort();
+  assert.deepEqual(recipients, ['meghana@example.com', DEFAULT_INBOX].sort());
+  assert.equal(body.customerMail?.sent, true);
+  assert.equal(body.customerMail?.status, 'sent');
 });
 
 test('POST /api/booking accepts the { booking } envelope too', async () => {

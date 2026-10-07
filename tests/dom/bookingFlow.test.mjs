@@ -109,6 +109,39 @@ test('a pending activation is reported honestly, with a way to deliver the booki
   assert.ok(app.document.querySelector('[data-testid="booking-whatsapp"]'), 'WhatsApp fallback is offered');
 });
 
+test('a successful company relay also tells the customer about their confirmation e-mail', async () => {
+  const app = await mountApp({
+    fetchImpl: async (url) => {
+      app.calls.push({ url: String(url), init: {} });
+      // The site's own relay answers: booking mailed to the company, and the
+      // thank-you mail with the PDF receipt mailed to the customer.
+      return {
+        status: 200,
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            success: true,
+            provider: 'brevo',
+            customerMail: { sent: true, status: 'sent', to: 'meghana@example.com' },
+          }),
+      };
+    },
+  });
+
+  await openBookingForm(app);
+  await fillAndSubmit(app);
+
+  const body = app.document.body.textContent;
+  assert.match(body, /Solar Booking Submitted Successfully!/);
+  assert.match(body, /e-mailed your booking confirmation and the official PDF receipt/);
+  assert.match(body, /meghana@example\.com/);
+
+  assert.ok(
+    findByText(app.document, 'button', 'Download Official Receipt (PDF)'),
+    'the PDF download is offered on the confirmation screen'
+  );
+});
+
 test('a blocked relay keeps the booking and never claims it was sent', async () => {
   const app = await mountApp({
     fetchImpl: async () => {
@@ -169,7 +202,7 @@ test('the receipts can always be copied and downloaded (no ReferenceError)', asy
   await fillAndSubmit(app);
 
   const copyButton = findByText(app.document, 'button', 'Copy Reference & Receipt');
-  const downloadButton = findByText(app.document, 'button', 'Download Official Receipt (.txt)');
+  const downloadButton = findByText(app.document, 'button', 'Download Official Receipt (PDF)');
   assert.ok(copyButton && downloadButton);
 
   // Both handlers used to throw on an out-of-scope variable.

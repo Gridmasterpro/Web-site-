@@ -4,13 +4,18 @@
  * Used by `api/booking.js` (Vercel) and `netlify/functions/booking.mjs`.
  * Answers JSON in every case so the browser can decide what to do next:
  *
- *   200 {success:true}                booking handed to the mail provider
+ *   200 {success:true, customerMail}  booking handed to the mail provider;
+ *                                     `customerMail` reports whether the
+ *                                     customer's thank-you mail with the PDF
+ *                                     receipt was sent ('sent' / 'failed' /
+ *                                     'disabled' / 'unsupported' / 'skipped')
  *   501 {configured:false}            host has no MAIL_* variables — the browser
  *                                     falls back to FormSubmit automatically
  *   400 / 429 / 502                   validation / throttling / provider error
  */
 
 import { sendBookingMail, resolveProvider } from './mailProvider.mjs';
+import { sendCustomerConfirmationMail, confirmationStatus } from './confirmationMail.mjs';
 import { logBookingToSheet } from './sheetLogger.mjs';
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -109,25 +114,44 @@ export async function handleBookingRequest(event, { env = {}, fetchImpl } = {}) 
     });
   }
 
-  const [mailResult, sheetResult] = await Promise.all([
+  // Company notification and customer thank-you mail (with the PDF receipt)
+  // are independent jobs — run them together, never let one block the other.
+  const [mailResult, confirmationResult, sheetResult] = await Promise.all([
     sendBookingMail({ booking, env, fetchImpl }),
+    sendCustomerConfirmationMail({ booking, env, fetchImpl }).catch((error) => ({
+      ok: false,
+      provider: provider.name,
+      error: error?.message || String(error),
+    })),
     sheetPromise,
   ]);
+
+  const customerMail = {
+    sent: confirmationResult?.ok === true,
+    status: confirmationStatus(confirmationResult),
+  };
+  if (customerMail.sent) customerMail.to = confirmationResult.to;
+  if (!customerMail.sent && confirmationResult?.error) customerMail.error = confirmationResult.error;
+  if (!customerMail.sent && confirmationResult?.reason) customerMail.reason = confirmationResult.reason;
 
   if (mailResult.ok) {
     return json(200, {
       success: true,
       provider: mailResult.provider,
-      to: mailResult.to || provider.to,
+      to: provider.to,
       logged: Boolean(sheetResult?.ok),
+      customerMail,
       ...sheetDiagnostics(sheetResult),
-      message: `Booking e-mailed from the ${mailResult.provider} relay.`,
+      message: customerMail.sent
+        ? `Booking e-mailed from the ${mailResult.provider} relay, and a confirmation with the PDF receipt was e-mailed to the customer.`
+        : `Booking e-mailed from the ${mailResult.provider} relay.`,
     });
   }
   return json(502, {
     success: false,
     provider: mailResult.provider,
     logged: Boolean(sheetResult?.ok),
+    customerMail,
     ...sheetDiagnostics(sheetResult),
     error: mailResult.error || 'The mail provider refused the booking.',
   });

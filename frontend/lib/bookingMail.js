@@ -268,6 +268,11 @@ export async function deliverViaServerRelay(payload, options = {}) {
         state: DELIVERY.DELIVERED,
         channel: 'server',
         provider: res.json?.provider,
+        // Whether the company relay also e-mailed the customer their
+        // thank-you confirmation with the PDF receipt attached.
+        customerMail: res.json?.customerMail && typeof res.json.customerMail === 'object'
+          ? { sent: res.json.customerMail.sent === true, status: text(res.json.customerMail.status) }
+          : undefined,
         status: res.status,
         message: text(res.json?.message) || 'Sent from the company mail relay.',
       };

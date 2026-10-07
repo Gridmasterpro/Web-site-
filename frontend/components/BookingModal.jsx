@@ -12,6 +12,7 @@ import {
   dequeueBooking,
   makeReference,
 } from '../lib/bookingMail';
+import { buildReceiptPdfFromPayload, downloadPdf } from '../lib/downloadPdf';
 
 const STANDARD_SERVICES = [
   "Solar Designing & 3D Simulation",
@@ -243,67 +244,58 @@ For assistance, contact Head Engineer G. Goutham at ${COMPANY_INFO.directPhone}.
 
   const handleCopyReceipt = () => handleCopy(buildReceiptText());
 
-  const handleDownloadReceipt = () => {
-    const quoteLines =
-      quoteItems.length > 0
-        ? `\nSELECTED EQUIPMENT PACKAGE:\n${quoteItems
-            .map((item) => `${item.name} x${item.quantity} = ${CURRENCY.formatINR(item.priceINR * item.quantity)}`)
-            .join("\n")}\nPackage Subtotal    : ${CURRENCY.formatINR(quoteTotalINR)} (≈ ${CURRENCY.formatUSD(quoteTotalUSD)})`
-        : "";
-    const receiptText = `=====================================================
-            GRID MASTER SOLAR SYSTEMS
-     ADVANCED SOLAR DESIGNING & GRID INTEGRATION
-=====================================================
-
-OFFICIAL BOOKING RECEIPT
------------------------------------------------------
-Booking Reference : ${bookingRef}
-Date Created      : ${new Date().toLocaleDateString()}
-
-CUSTOMER DETAILS:
------------------------------------------------------
-Full Name         : ${customerName}
-Phone Number      : ${customerPhone}
-Email Address     : ${customerEmail}
-Site Address      : ${propertyAddress}
-
-PROJECT SPECIFICATIONS:
------------------------------------------------------
-Installation Purpose: ${purpose === "home" ? "Home (Residential)" : "Building (Commercial)"}
-Required Service    : ${serviceType}
-Scheduled Audit Date: ${date}
-Time Slot           : ${timeSlot}
-Lead Engineer       : ${leadEngineerLabel()}
-Special Notes       : ${notes || "N/A"}
-${quoteLines}
-ENGINEERING DIRECTORY:
------------------------------------------------------
-Head Engineer : GANDHAMANENI GOUTHAM
-Direct Phone  : ${COMPANY_INFO.directPhone}
-Company Email : ${COMPANY_INFO.email}
-Solar Designer: Ashish Kumar
-
-Mail status: ${
-      delivered
-        ? `DELIVERED TO ${inbox}`
-        : `NOT CONFIRMED - ${delivery?.message || "please reach us directly to confirm your slot"}`
+  /** One honest status line stamped on the PDF receipt. */
+  const receiptStatusText = () => {
+    if (delivered) {
+      const base = `Booking e-mailed to ${inbox} via the ${
+        delivery?.channel === "server" ? "company mail relay" : "website mail relay"
+      }.`;
+      return delivery?.customerMail?.sent
+        ? `${base} A confirmation e-mail with this PDF receipt was sent to ${customerEmail}.`
+        : base;
     }
-=====================================================`;
+    return "Delivery pending — please confirm your slot via the call / WhatsApp / e-mail buttons.";
+  };
 
-    // Some in-app browsers (Instagram / WhatsApp webviews) block Blob
-    // downloads — fall back to copying the receipt rather than doing nothing.
+  /**
+   * Download the official booking receipt as a branded PDF.
+   *
+   * The same renderer (shared/bookingPdf.mjs) produces the PDF our backend
+   * attaches to the customer's confirmation e-mail, so the two always match.
+   * Some in-app browsers (Instagram / WhatsApp webviews) block Blob
+   * downloads — fall back to copying the receipt text rather than doing
+   * nothing.
+   */
+  const handleDownloadReceipt = () => {
     try {
-      const blob = new Blob([receiptText], { type: "text/plain;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", `GridMaster_Booking_${bookingRef}.txt`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const payload =
+        submittedPayload.current ||
+        buildBookingPayload(
+          {
+            customerName,
+            customerPhone,
+            customerEmail,
+            propertyAddress,
+            purpose,
+            serviceType,
+            leadEngineer: leadEngineerLabel(),
+            date,
+            timeSlot,
+            notes,
+            quoteSummary: quoteItems.length > 0 ? buildQuoteSummary() : "",
+            quoteTotal:
+              quoteItems.length > 0
+                ? `${CURRENCY.formatINR(quoteTotalINR)} (≈ ${CURRENCY.formatUSD(quoteTotalUSD)})`
+                : "",
+          },
+          { reference: bookingRef, inbox }
+        );
+      const { pdf, filename } = buildReceiptPdfFromPayload(payload, {
+        status: { delivered, text: receiptStatusText() },
+      });
+      downloadPdf(pdf, filename);
     } catch {
-      handleCopy(receiptText);
+      handleCopy(buildReceiptText());
     }
   };
 
@@ -700,6 +692,18 @@ Mail status: ${
               within 24 hours to confirm your audit slot.
             </p>
 
+            {delivered && delivery?.customerMail?.sent && (
+              <div className="max-w-lg mx-auto rounded-2xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] leading-relaxed text-emerald-200 text-left">
+                  We've e-mailed your booking confirmation and the official PDF receipt to{" "}
+                  <strong className="text-emerald-100">{customerEmail}</strong> — it states the
+                  team member visiting you on <strong className="text-emerald-100">{date}</strong>{" "}
+                  during <strong className="text-emerald-100">{timeSlot}</strong>.
+                </p>
+              </div>
+            )}
+
             {!delivered && (
               <div className="max-w-lg mx-auto rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 text-left space-y-3">
                 <p className="text-xs text-amber-200 leading-relaxed">{diagnosis()}</p>
@@ -808,10 +812,11 @@ Mail status: ${
 
               <button
                 onClick={handleDownloadReceipt}
+                data-testid="booking-download-pdf"
                 className="px-5 py-3 rounded-2xl bg-amber-500 text-slate-950 font-bold text-xs hover:bg-amber-400 transition-all shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
               >
                 <Download className="w-4 h-4" />
-                <span>Download Official Receipt (.txt)</span>
+                <span>Download Official Receipt (PDF)</span>
               </button>
 
               <button

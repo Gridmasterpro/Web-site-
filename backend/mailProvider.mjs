@@ -7,10 +7,16 @@
  * sends the booking from the company's own mail provider — no activation step,
  * nothing for an ad-blocker to block.
  *
+ * It handles two kinds of mail now:
+ *
+ *   1. the booking notification to the COMPANY inbox (sendBookingMail), and
+ *   2. the thank-you confirmation with the PDF receipt to the CUSTOMER
+ *      (backend/confirmationMail.mjs, built on sendProviderMail below).
+ *
  * Configure ONE of these environment variables on the host (see .env.example):
  *
+ *   BREVO_API_KEY       + MAIL_FROM          https://brevo.com (recommended)
  *   RESEND_API_KEY      + MAIL_FROM          https://resend.com
- *   BREVO_API_KEY       + MAIL_FROM          https://brevo.com
  *   SENDGRID_API_KEY    + MAIL_FROM          https://sendgrid.com
  *   WEB3FORMS_KEY                            https://web3forms.com
  *   MAIL_WEBHOOK_URL                         any URL that accepts JSON
@@ -21,8 +27,21 @@
 
 export const DEFAULT_INBOX = 'contactgridmaster@gmail.com';
 export const DEFAULT_FROM = 'Grid Master Website <onboarding@resend.dev>';
+export const DEFAULT_SENDER_NAME = 'Grid Master Website';
 
 const asText = (value) => (value === undefined || value === null ? '' : String(value));
+
+/** Split `Name <address>` (or a bare address) into its parts. */
+export function parseFromAddress(fromRaw) {
+  const raw = asText(fromRaw).trim() || DEFAULT_FROM;
+  const match = raw.match(/^(.*?)<([^>]+)>\s*$/);
+  if (!match) return { raw, name: DEFAULT_SENDER_NAME, email: raw.replace(/^"|"$/g, '').trim() };
+  return {
+    raw,
+    name: match[1].trim().replace(/^"|"$/g, '') || DEFAULT_SENDER_NAME,
+    email: match[2].trim(),
+  };
+}
 
 /** Turn the browser payload into a readable, escaped mail. */
 export function renderBookingMail(booking = {}, { inbox = DEFAULT_INBOX } = {}) {
@@ -47,7 +66,7 @@ export function renderBookingMail(booking = {}, { inbox = DEFAULT_INBOX } = {}) 
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/\"/g, '&quot;');
 
   const subject =
     asText(booking._subject).trim() ||
@@ -62,25 +81,25 @@ export function renderBookingMail(booking = {}, { inbox = DEFAULT_INBOX } = {}) 
     `Booking mail delivered to ${inbox}.`,
   ].join('\n');
 
-  const htmlBody = `<!doctype html><html><body style="margin:0;background:#f8fafc;padding:24px;font-family:Segoe UI,Arial,sans-serif;color:#0f172a">
-  <table role="presentation" width="100%" style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden">
-    <tr><td style="background:#0f172a;padding:20px 24px">
-      <p style="margin:0;color:#fbbf24;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:700">Grid Master Solar Systems</p>
-      <h1 style="margin:6px 0 0;color:#ffffff;font-size:20px">New Solar Integration Booking</h1>
-      <p style="margin:6px 0 0;color:#94a3b8;font-size:12px">Reference ${escape(booking.booking_reference)} &middot; submitted from the website</p>
+  const htmlBody = `<!doctype html><html><body style=\"margin:0;background:#f8fafc;padding:24px;font-family:Segoe UI,Arial,sans-serif;color:#0f172a\">
+  <table role=\"presentation\" width=\"100%\" style=\"max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden\">
+    <tr><td style=\"background:#0f172a;padding:20px 24px\">
+      <p style=\"margin:0;color:#fbbf24;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:700\">Grid Master Solar Systems</p>
+      <h1 style=\"margin:6px 0 0;color:#ffffff;font-size:20px\">New Solar Integration Booking</h1>
+      <p style=\"margin:6px 0 0;color:#94a3b8;font-size:12px\">Reference ${escape(booking.booking_reference)} &middot; submitted from the website</p>
     </td></tr>
-    <tr><td style="padding:8px 24px 24px">
-      <table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px">
+    <tr><td style=\"padding:8px 24px 24px\">
+      <table role=\"presentation\" width=\"100%\" style=\"border-collapse:collapse;font-size:14px\">
         ${rows
           .map(
             ([label, value], index) => `<tr>
-          <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;background:${index % 2 ? '#f8fafc' : '#ffffff'};color:#475569;font-weight:600;width:42%">${escape(label)}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;background:${index % 2 ? '#f8fafc' : '#ffffff'};color:#0f172a;white-space:pre-wrap">${escape(value)}</td>
+          <td style=\"padding:10px 12px;border-bottom:1px solid #e2e8f0;background:${index % 2 ? '#f8fafc' : '#ffffff'};color:#475569;font-weight:600;width:42%\">${escape(label)}</td>
+          <td style=\"padding:10px 12px;border-bottom:1px solid #e2e8f0;background:${index % 2 ? '#f8fafc' : '#ffffff'};color:#0f172a;white-space:pre-wrap\">${escape(value)}</td>
         </tr>`
           )
           .join('')}
       </table>
-      <p style="margin:20px 0 0;font-size:13px;color:#475569">Reply to this mail to answer <strong>${escape(booking.customer_name)}</strong> directly${
+      <p style=\"margin:20px 0 0;font-size:13px;color:#475569\">Reply to this mail to answer <strong>${escape(booking.customer_name)}</strong> directly${
         booking.customer_email || booking.email ? ` (${escape(booking.customer_email || booking.email)})` : ''
       }.</p>
     </td></tr>
@@ -91,12 +110,27 @@ export function renderBookingMail(booking = {}, { inbox = DEFAULT_INBOX } = {}) 
 }
 
 /**
- * Pick the first configured provider.
- * @returns {{name: string, configured: boolean, send?: Function, reason?: string}}
+ * Normalise a mail object's attachments across providers.
+ * Attachment shape used internally:
+ *   { filename, contentBase64, contentType } (only base64 PDF receipts today)
+ */
+const hasAttachments = (mail) => Array.isArray(mail.attachments) && mail.attachments.length > 0;
+
+/**
+ * Pick the first configured provider. Each provider exposes:
+ *   name                  identifier ('resend', 'brevo', ...)
+ *   configured            always true here (the fallback object says false)
+ *   to                    default recipient (the company inbox, MAIL_TO)
+ *   canChooseRecipient    false when mails can only ever reach the site owner
+ *   supportsAttachments   false when files cannot ride along
+ *   send(fetch, mail, booking) → fetch-Response-like
+ * @returns {{name: string, configured: boolean, to: string, canChooseRecipient?: boolean, supportsAttachments?: boolean, send?: Function, reason?: string}}
  */
 export function resolveProvider(env = {}) {
-  const from = asText(env.MAIL_FROM).trim() || DEFAULT_FROM;
+  const from = parseFromAddress(env.MAIL_FROM);
   const to = asText(env.MAIL_TO).trim() || DEFAULT_INBOX;
+  const recipientOf = (mail) => asText(mail.to).trim() || to;
+  const senderName = (mail, fallback = DEFAULT_SENDER_NAME) => asText(mail.fromName).trim() || from.name || fallback;
 
   if (asText(env.RESEND_API_KEY).trim()) {
     const key = env.RESEND_API_KEY.trim();
@@ -104,17 +138,22 @@ export function resolveProvider(env = {}) {
       name: 'resend',
       configured: true,
       to,
+      canChooseRecipient: true,
+      supportsAttachments: true,
       send: (fetchImpl, mail) =>
         fetchImpl('https://api.resend.com/emails', {
           method: 'POST',
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from,
-            to: [to],
+            from: asText(mail.fromName).trim() ? `${mail.fromName} <${from.email}>` : from.raw,
+            to: [recipientOf(mail)],
             subject: mail.subject,
             text: mail.textBody,
             html: mail.htmlBody,
             reply_to: mail.replyTo || undefined,
+            attachments: hasAttachments(mail)
+              ? mail.attachments.map((a) => ({ filename: a.filename, content: a.contentBase64 }))
+              : undefined,
           }),
         }),
     };
@@ -122,22 +161,26 @@ export function resolveProvider(env = {}) {
 
   if (asText(env.BREVO_API_KEY).trim()) {
     const key = env.BREVO_API_KEY.trim();
-    const senderEmail = (from.match(/<([^>]+)>/)?.[1] || from).trim();
     return {
       name: 'brevo',
       configured: true,
       to,
+      canChooseRecipient: true,
+      supportsAttachments: true,
       send: (fetchImpl, mail) =>
         fetchImpl('https://api.brevo.com/v3/smtp/email', {
           method: 'POST',
           headers: { 'api-key': key, 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify({
-            sender: { email: senderEmail, name: 'Grid Master Website' },
-            to: [{ email: to }],
+            sender: { email: from.email, name: senderName(mail) },
+            to: [{ email: recipientOf(mail) }],
             replyTo: mail.replyTo ? { email: mail.replyTo } : undefined,
             subject: mail.subject,
             textContent: mail.textBody,
             htmlContent: mail.htmlBody,
+            attachment: hasAttachments(mail)
+              ? mail.attachments.map((a) => ({ name: a.filename, content: a.contentBase64 }))
+              : undefined,
           }),
         }),
     };
@@ -145,24 +188,33 @@ export function resolveProvider(env = {}) {
 
   if (asText(env.SENDGRID_API_KEY).trim()) {
     const key = env.SENDGRID_API_KEY.trim();
-    const senderEmail = (from.match(/<([^>]+)>/)?.[1] || from).trim();
     return {
       name: 'sendgrid',
       configured: true,
       to,
+      canChooseRecipient: true,
+      supportsAttachments: true,
       send: (fetchImpl, mail) =>
         fetchImpl('https://api.sendgrid.com/v3/mail/send', {
           method: 'POST',
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            personalizations: [{ to: [{ email: to }] }],
-            from: { email: senderEmail, name: 'Grid Master Website' },
+            personalizations: [{ to: [{ email: recipientOf(mail) }] }],
+            from: { email: from.email, name: senderName(mail) },
             reply_to: mail.replyTo ? { email: mail.replyTo } : undefined,
             subject: mail.subject,
             content: [
               { type: 'text/plain', value: mail.textBody },
               { type: 'text/html', value: mail.htmlBody },
             ],
+            attachments: hasAttachments(mail)
+              ? mail.attachments.map((a) => ({
+                  content: a.contentBase64,
+                  filename: a.filename,
+                  type: a.contentType || 'application/pdf',
+                  disposition: 'attachment',
+                }))
+              : undefined,
           }),
         }),
     };
@@ -174,6 +226,10 @@ export function resolveProvider(env = {}) {
       name: 'web3forms',
       configured: true,
       to,
+      // Web3Forms always mails the address the access key belongs to — it
+      // cannot deliver anything to the customer, and it takes no attachments.
+      canChooseRecipient: false,
+      supportsAttachments: false,
       send: (fetchImpl, mail, booking) =>
         fetchImpl('https://api.web3forms.com/submit', {
           method: 'POST',
@@ -181,7 +237,7 @@ export function resolveProvider(env = {}) {
           body: JSON.stringify({
             access_key: key,
             subject: mail.subject,
-            from_name: 'Grid Master Website',
+            from_name: senderName(mail),
             replyto: mail.replyTo,
             ...booking,
           }),
@@ -195,11 +251,26 @@ export function resolveProvider(env = {}) {
       name: 'webhook',
       configured: true,
       to,
+      canChooseRecipient: true,
+      supportsAttachments: true,
       send: (fetchImpl, mail, booking) =>
         fetchImpl(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ ...booking, subject: mail.subject, text: mail.textBody, html: mail.htmlBody }),
+          body: JSON.stringify({
+            ...booking,
+            to: recipientOf(mail),
+            subject: mail.subject,
+            text: mail.textBody,
+            html: mail.htmlBody,
+            attachments: hasAttachments(mail)
+              ? mail.attachments.map((a) => ({
+                  filename: a.filename,
+                  content_base64: a.contentBase64,
+                  content_type: a.contentType || 'application/pdf',
+                }))
+              : undefined,
+          }),
         }),
     };
   }
@@ -219,13 +290,14 @@ async function withTimeout(fetchImpl, url, init, ms = 12000) {
 }
 
 /**
- * Send one booking. Never throws — the caller gets a structured verdict.
- * @returns {Promise<{configured: boolean, ok: boolean, provider: string, status?: number, error?: string, skipped?: boolean}>}
+ * Hand one rendered mail to one provider. Never throws — the caller gets a
+ * structured verdict. Shared by the booking notification and the customer
+ * confirmation.
+ * @returns {Promise<{configured: boolean, ok: boolean, provider: string, status?: number, error?: string, message?: string}>}
  */
-export async function sendBookingMail({ booking = {}, env = {}, fetchImpl } = {}) {
-  const provider = resolveProvider(env);
-  if (!provider.configured) {
-    return { configured: false, ok: false, provider: provider.name, error: provider.reason };
+export async function sendProviderMail(provider, mail, booking, { fetchImpl } = {}) {
+  if (!provider?.configured) {
+    return { configured: false, ok: false, provider: provider?.name || 'none', error: provider?.reason || 'No mail provider configured on this host.' };
   }
 
   const doFetch = fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
@@ -233,15 +305,8 @@ export async function sendBookingMail({ booking = {}, env = {}, fetchImpl } = {}
     return { configured: true, ok: false, provider: provider.name, error: 'No fetch implementation available.' };
   }
 
-  const mail = renderBookingMail(booking, { inbox: provider.to });
-  mail.replyTo = asText(booking.customer_email || booking.email || booking._replyto).trim() || undefined;
-
   try {
-    const res = await provider.send(
-      (url, init) => withTimeout(doFetch, url, init),
-      mail,
-      booking
-    );
+    const res = await provider.send((url, init) => withTimeout(doFetch, url, init), mail, booking);
     const raw = await res.text().catch(() => '');
     if (res.ok) {
       return { configured: true, ok: true, provider: provider.name, status: res.status, message: raw.slice(0, 300) };
@@ -261,6 +326,22 @@ export async function sendBookingMail({ booking = {}, env = {}, fetchImpl } = {}
       error: error?.name === 'AbortError' ? 'The mail provider did not answer in time.' : error?.message || String(error),
     };
   }
+}
+
+/**
+ * Send one booking notification to the company inbox. Never throws.
+ * @returns {Promise<{configured: boolean, ok: boolean, provider: string, status?: number, error?: string, skipped?: boolean}>}
+ */
+export async function sendBookingMail({ booking = {}, env = {}, fetchImpl } = {}) {
+  const provider = resolveProvider(env);
+  if (!provider.configured) {
+    return { configured: false, ok: false, provider: provider.name, error: provider.reason };
+  }
+
+  const mail = renderBookingMail(booking, { inbox: provider.to });
+  mail.replyTo = asText(booking.customer_email || booking.email || booking._replyto).trim() || undefined;
+
+  return sendProviderMail(provider, mail, booking, { fetchImpl });
 }
 
 export function extractError(raw) {

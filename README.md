@@ -2,7 +2,76 @@
 
 **Grid Master** is a modern, high-performance web platform for solar systems engineering, rooftop 3D designing, equipment price cataloging, and turnkey installation & grid integration. Designed for both **Home (Residential)** and **Building (Commercial)** solar purpose requirements.
 
-This repository is the full web application (a React + Vite + Tailwind + React Router multi-page app — every menu item opens its own page) — deployable directly from the repo root to Netlify, Vercel or Cloudflare Pages.
+This repository is the full web application (a React + Vite + Tailwind + React Router multi-page app — every menu item opens its own page), deployable directly from the repo root to Vercel (primary) or Netlify.
+
+> ### ⚠️ One-time Vercel setting after the 2026 reorganization
+> The code used to live one folder deeper (`Grid-Master-Web-site--main/`). It now
+> sits at the **repository root**. In your Vercel project open
+> **Settings → General → Root Directory** and change it from
+> `Grid-Master-Web-site--main` to the repository root (`.`, i.e. leave the field
+> empty / `./`), then **Redeploy**. Nothing else changed about hosting:
+> `vercel.json` still provides the SPA rewrite and `api/` still hosts the
+> booking functions.
+
+---
+
+## 🗂️ Where things live (repo map)
+
+```
+Web-site-/
+│
+├── 🌐 frontend/                  ← THE WEBSITE (everything the visitor's browser runs)
+│   ├── main.jsx, App.jsx         →  app entry, routing, shared booking state
+│   ├── index.css                 →  Tailwind + 3D flip-card + utilities
+│   ├── pages/                    →  one file per URL (HomePage, ServicesPage, …)
+│   ├── components/               →  Navbar, Hero, BookingModal, SolarCalculator, …
+│   ├── data/solarData.js         →  EDIT ME: prices, company info, team, FAQs
+│   └── lib/
+│       ├── bookingMail.js        →  booking delivery engine (relay ladder, retry queue)
+│       └── downloadPdf.js        →  hands the browser the PDF receipt
+│
+├── ⚙️ backend/                   ← THE SERVER SIDE (runs inside serverless functions)
+│   ├── handleBooking.mjs         →  POST /api/booking handler: validation, throttling
+│   ├── mailProvider.mjs          →  Brevo / Resend / SendGrid / Web3Forms / webhook
+│   ├── confirmationMail.mjs      →  customer thank-you mail + PDF attachment
+│   ├── sheetLogger.mjs           →  appends every booking to your Google Sheet
+│   └── bookingHealth.mjs         →  read-only self-diagnosis endpoint
+│
+├── 🔗 shared/                    ← code used by BOTH sides (no browser, no Node APIs)
+│   ├── bookingPdf.mjs            →  branded booking-receipt PDF generator (zero deps)
+│   └── receiptModel.mjs          →  normalises a booking for the PDF
+│
+├── 🚢 api/                       ← VERCEL deploy glue (thin wrappers around backend/)
+│   ├── booking.js                →  POST /api/booking
+│   └── booking-health.js         →  GET  /api/booking-health
+├── 🚢 netlify/functions/         ← NETLIFY deploy glue (same wrappers, kept as option)
+│
+├── 📚 docs/                      ← click-by-click setup guides
+│   ├── booking-email-setup.md    →  mail relay + customer confirmation (Brevo)
+│   ├── customer-bookings-sheet-setup.md → Google Sheet logger
+│   └── google-apps-script/       →  the Apps Script to paste for the sheet
+│
+├── 🧪 tests/                     ← automated tests (node:test, 96 tests)
+├── 🛠️ scripts/                   ← dev helpers (run.bat for Windows, svg maker)
+├── public/                       ← static files copied into the build as-is
+│
+├── index.html                    ← the single HTML page everything renders into
+├── package.json                  ← dependencies & npm scripts
+├── vite.config.js                ← build config (Vite 5)
+├── tailwind.config.js            ← styling config (scans frontend/)
+├── postcss.config.js             ← CSS post-processing
+├── vercel.json                   ← Vercel: SPA rewrite
+├── netlify.toml                  ← Netlify: build + functions + redirects
+├── .env.example                  →  🔑 API KEYS TEMPLATE — the only place keys are
+│                                    configured (copy values into the Vercel
+│                                    dashboard, never into git)
+└── .gitignore                    →  node_modules, dist, .env, logs
+```
+
+**In a hurry?** Prices/text → `frontend/data/solarData.js`. Booking form →
+`frontend/components/BookingModal.jsx`. Booking e-mail → `backend/`. Receipt
+look → `shared/bookingPdf.mjs`. API keys → Vercel dashboard (template:
+`.env.example`). Setup guides → `docs/`.
 
 ---
 
@@ -20,7 +89,7 @@ This repository is the full web application (a React + Vite + Tailwind + React R
 
 Menu links open real pages (no fast in-page scrolling); each page opens at the top with a soft fade-in.
 Because these are real URLs the host must serve `index.html` for unknown paths — already configured for
-Netlify (`netlify.toml`, `public/_redirects`) and Vercel (`vercel.json`). For a local static server use `npx serve -s dist`.
+Vercel (`vercel.json`) and Netlify (`netlify.toml`, `public/_redirects`). For a local static server use `npm run build && npx serve -s dist`.
 
 ---
 
@@ -39,18 +108,22 @@ Netlify (`netlify.toml`, `public/_redirects`) and Vercel (`vercel.json`). For a 
 ### 3. 🛒 Hardware Catalog with Transparent Pricing + Quote Builder
 - Component store with prices for panels, hybrid inverters, LiFePO4 batteries, and racking.
 - Category filtering + live search.
-- **Quote builder**: add equipment, adjust quantities with +/− steppers, see the live package total, then book installation with the exact package attached to the booking email and receipt.
+- **Quote builder**: add equipment, adjust quantities with +/− steppers, see the live package total, then book installation with the exact package attached to the booking email and PDF receipt.
 
 ### 4. 📅 Online Booking Engine
 - Purpose (Home/Building), service type, preferred lead engineer, date (no past dates), time slot, contact & property details.
 - Delivers to `contactgridmaster@gmail.com` through relays tried in order — the site's own mail relay first, then FormSubmit — so a single blocked or un-activated relay cannot lose a booking.
 - **Honest status handling**: the confirmation screen only says "submitted successfully" when a relay confirmed it; otherwise it says the booking is saved and offers one-click retry, a pre-filled e-mail, WhatsApp and phone.
 - A booking that could not be sent is stored on the device and re-sent automatically later (next visit / back online).
-- Copy or download an official booking receipt (.txt) with the reference ID and equipment package.
+- **📄 Official PDF receipt**: one click downloads a branded A4 receipt (reference, contact details, site-visit date & slot, lead engineer, equipment package) — generated in the browser with zero dependencies.
+- **✉️ Instant customer confirmation**: when the own-relay is configured, the customer is automatically e-mailed a thank-you **from the company** stating which team member visits on which date and time slot, **with the same PDF receipt attached**.
+- **Copy Reference & Receipt** button for pasting into WhatsApp or mail.
 
-> **Booking e-mails are not arriving?** See [`docs/booking-email-setup.md`](docs/booking-email-setup.md) —
-> it explains the one-time FormSubmit activation, the permanent own-provider setup
-> (`.env.example`), and how to recover bookings FormSubmit received but never delivered.
+> **Setup for booking e-mails + customer confirmations**: [`docs/booking-email-setup.md`](docs/booking-email-setup.md)
+> — the recommended, free Brevo path takes ~10 minutes and covers both mail directions.
+>
+> **Want every booking as a spreadsheet row too?**
+> See [`docs/customer-bookings-sheet-setup.md`](docs/customer-bookings-sheet-setup.md).
 
 ### 5. 📐 Designing Samples & CAD Blueprint Viewer
 - Residential and commercial case-study portfolio with filters.
@@ -77,7 +150,8 @@ Netlify (`netlify.toml`, `public/_redirects`) and Vercel (`vercel.json`). For a 
 - **Icons**: Lucide React
 - **QR**: qrcode.react
 - **Typography**: Inter & Fira Code (Google Fonts)
-- **Deployment**: Vercel / Netlify / Cloudflare Pages ready (`netlify.toml` included)
+- **PDF receipts**: hand-rolled, dependency-free generator in `shared/` (no 300 KB library in the bundle)
+- **Deployment**: Vercel (primary) / Netlify ready
 
 ---
 
@@ -92,14 +166,15 @@ npm run dev        # → http://localhost:3000
 npm run build      # production build in dist/
 ```
 
-### ⚠️ Important: Activate the booking email (one-time)
-Bookings are delivered through [FormSubmit](https://formsubmit.co). **Before the first real booking can arrive**, the owner of `contactgridmaster@gmail.com` must:
+On Windows you can also double-click `scripts/run.bat`.
 
-1. Submit any booking from the live site (or trigger one from the local dev server).
-2. Open the inbox of `contactgridmaster@gmail.com` — FormSubmit will send an **activation email**.
-3. Click the **Activate** link in that email.
+### ⚠️ Important: booking e-mails need a one-time setup
+Out of the box the site tries your own relay and then FormSubmit. **Before the first real booking can arrive**, either:
 
-After activation, every booking submission is emailed as a clean table. Until activation happens, the site still shows the customer a reference ID and offers call/WhatsApp fallbacks, but the email itself will not be delivered.
+- **Path A (30 s)** — activate FormSubmit once from the `contactgridmaster@gmail.com` inbox, **or**
+- **Path B (~10 min, recommended)** — set `BREVO_API_KEY` + `MAIL_FROM` + `MAIL_TO` on Vercel. This also unlocks the **customer thank-you mail with the PDF receipt attached**.
+
+Full click-by-click guide: [`docs/booking-email-setup.md`](docs/booking-email-setup.md).
 
 ---
 
@@ -107,14 +182,14 @@ After activation, every booking submission is emailed as a clean table. Until ac
 
 Prices show **₹ (primary) with an ≈ $ equivalent** across the catalog, quote builder,
 calculator and booking receipts — all driven by one config in
-[`src/data/solarData.js`](./src/data/solarData.js):
+[`frontend/data/solarData.js`](./frontend/data/solarData.js):
 
 ```js
 export const CURRENCY = {
   rate: 85, // ₹ per 1 USD (reference conversion)
   formatINR / formatUSD / inrFromUSD / usdFromINR
 };
-export const SOLAR_ASSUMPTIONS = { tariffPerKwhInr: 8, ... }; // calculator (INR-based)
+export const SOLAR_ASSUMPTIONS = { tariffPerKwhInr: 10, ... }; // calculator (INR-based)
 ```
 
 - **Change the reference rate**: edit `CURRENCY.rate`.
@@ -122,55 +197,8 @@ export const SOLAR_ASSUMPTIONS = { tariffPerKwhInr: 8, ... }; // calculator (INR
 - **Change calculator assumptions** (tariff, cost per kW, battery cost): edit `SOLAR_ASSUMPTIONS`.
 
 > The ≈ $ values are conversions at the reference rate — if you want exact fixed USD prices
-> next to the ₹ prices, set them manually per item.
-
----
-
-## 📁 Project Structure
-
-```
-Grid-Master-Web-site-/
-├── README.md
-├── index.html
-├── package.json
-├── vite.config.js
-├── tailwind.config.js
-├── postcss.config.js
-├── netlify.toml                    # Netlify build & deploy config
-├── vercel.json                     # Vercel rewrites (SPA routes)
-├── .env.example                    # Optional mail-provider keys for the booking relay
-├── run.bat                         # Windows one-click launcher
-├── public/
-├── docs/
-│   └── booking-email-setup.md      # Why bookings were not e-mailed + how to finish setup
-├── server/
-│   ├── mailProvider.mjs            # Resend / Brevo / SendGrid / Web3Forms / webhook sender
-│   └── handleBooking.mjs           # Shared request handler + validation + throttling
-├── api/booking.js                  # Vercel function  → POST /api/booking
-├── netlify/functions/booking.mjs   # Netlify function → /.netlify/functions/booking
-├── tests/                          # node:test suites (engine, server relay, jsdom flows)
-└── src/
-    ├── main.jsx
-    ├── App.jsx                     # Section composition + shared booking/quote state
-    ├── index.css                   # Tailwind + flip-card 3D + utilities
-    ├── data/
-    │   └── solarData.js            # Currency, assumptions, team, catalog, samples, FAQs
-    ├── lib/
-    │   └── bookingMail.js          # Booking delivery engine (relay ladder, honest states, retry queue)
-    └── components/
-        ├── Navbar.jsx              # Sticky header nav + quick actions
-        ├── Hero.jsx                # Hero banner with primary CTAs
-        ├── VisitingCard.jsx        # 3D flippable card, real QR, vCard download
-        ├── Services.jsx            # Home & Building service capabilities
-        ├── DesignSamples.jsx       # Blueprint portfolio & CAD inspection modal
-        ├── EquipmentCatalog.jsx    # Store, search/filter, quote builder w/ quantities
-        ├── SolarCalculator.jsx     # Sizing & ROI engine (roof-aware)
-        ├── Team.jsx                # Engineering roster
-        ├── BookingModal.jsx        # Booking form + delivery status + receipt + fallbacks
-        ├── Testimonials.jsx        # Reviews & FAQ accordion
-        ├── Footer.jsx              # Footer links & contact
-        └── WhatsAppButton.jsx      # Floating WhatsApp contact button
-```
+> next to the ₹ prices, set them manually per item. (On PDF receipts ₹ is printed as
+> "Rs." — classic PDF fonts have no ₹ glyph.)
 
 ---
 
@@ -183,7 +211,7 @@ Grid-Master-Web-site-/
 - **Solar Designer Engineer**: Ashish Kumar — `snazzy5566@gmail.com`
 - **Headquarters**: Solar Tech Park, Suite 402, Clean Energy Corridor, Hyderabad
 
-> Note: `contactgridmaster@gmail.com` is the booking receipt inbox configured in `COMPANY_INFO` — update it in `src/data/solarData.js` if you move to a company domain.
+> Note: `contactgridmaster@gmail.com` is the booking receipt inbox configured in `COMPANY_INFO` — update it in `frontend/data/solarData.js` if you move to a company domain.
 > Changing it also invalidates the FormSubmit activation for the old address, so re-run the
 > one-time activation in [`docs/booking-email-setup.md`](docs/booking-email-setup.md), or set
 > `MAIL_TO` to the new inbox with a mail provider configured.
@@ -193,7 +221,7 @@ Grid-Master-Web-site-/
 ## 🧪 Tests
 
 ```bash
-npm test        # 47 tests: delivery engine, server relay, jsdom booking flows
+npm test        # 96 tests: delivery engine, server relay, PDF, confirmation mail, jsdom flows
 npm run verify  # tests + production build
 ```
 
@@ -201,7 +229,13 @@ npm run verify  # tests + production build
   activation/error answers, retry queue behaviour.
 - `tests/serverRelay.test.mjs` — provider detection, mail rendering/escaping, handler
   validation, throttling, 501 fallback.
+- `tests/confirmationMail.test.mjs` — the customer thank-you mail: visit details,
+  provider attachment shapes (Brevo/Resend/SendGrid), Web3Forms skip, kill switch,
+  and that a confirmation failure never breaks the booking.
+- `tests/bookingPdf.test.mjs` — PDF structure/xref validity, ₹ → Rs. sanitisation,
+  model mapping, determinism, pagination.
 - `tests/apiAdapters.test.mjs` — the Vercel and Netlify entry points.
+- `tests/sheetLogger.test.mjs` — Google Sheet logging + health checks.
 - `tests/dom/bookingFlow.test.mjs` — drives the real app in jsdom: opens the booking form,
   submits it, and asserts what goes on the wire and what the customer is told (including that
   a blocked or un-activated relay is **never** reported as a successful delivery).

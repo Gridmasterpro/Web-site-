@@ -1,35 +1,33 @@
-# Booking e-mails — why they were not arriving, and how to finish the setup
+# Booking e-mails — full setup guide
 
-## What was wrong
+This guide covers the three mails/files around every booking:
 
-The booking form posted to `https://formsubmit.co/ajax/contactgridmaster@gmail.com`
-as a cross-origin JSON request and then reported **"sent"** as soon as the
-request finished — whatever the relay actually answered.
+1. **Booking notification → your company inbox** (always wanted).
+2. **Thank-you confirmation → the customer**, sent from your company with the
+   **official booking receipt attached as a branded PDF** (needs Path B).
+3. **PDF receipt download** in the customer's browser (works everywhere, no
+   setup at all).
 
-That created four ways for a booking to disappear:
+> One-time note for the repository layout: file paths changed when the repo
+> was reorganised. The booking engine now lives in `frontend/lib/`, the mail
+> senders in `backend/`, and the shared PDF receipt builder in `shared/`.
 
-| # | Cause | What the visitor saw |
-| - | ----- | -------------------- |
-| 1 | **FormSubmit needs a one-time activation.** The first submission mails an *Activate Form* link to the inbox and discards every submission until the link is clicked (`{"success":"false","message":"This form needs Activation…"}`). | "Submitted successfully" — nothing in the inbox |
-| 2 | **Ad-blockers / privacy extensions / filtered networks** drop requests to `formsubmit.co`; the browser reports an opaque `Failed to fetch`. | "Booking Received — One Step Left" (the ⚠️ screen) |
-| 3 | **A JSON body forces a CORS preflight** (`OPTIONS`) that the same setups refuse even when the POST would have worked. | Same ⚠️ screen |
-| 4 | The UI printed success without reading the relay answer, so all of the above looked identical to a real delivery. | False confidence |
+---
 
-There was also a crash: the "Copy Reference & Receipt" and "Download Receipt"
-buttons referenced a `targetEmail` variable that did not exist, so they threw a
-`ReferenceError` and did nothing.
+## What happens on every booking
 
-## What the site does now
-
-The booking engine (`src/lib/bookingMail.js`) tries the relays in order and
-reports **exactly** what happened — no guessing:
+The booking engine (`frontend/lib/bookingMail.js`) tries the relays in order
+and reports **exactly** what happened — no guessing:
 
 1. **The site's own relay** — `/api/booking` (Vercel) or
    `/.netlify/functions/booking` (Netlify). Same-origin, no activation, no CORS,
-   no ad-blocker surface. Sends through *your* mail provider.
+   no ad-blocker surface. Sends through *your* mail provider, and also sends
+   the **customer confirmation mail with the PDF receipt attached** when the
+   provider supports it (all recommended providers do).
 2. **FormSubmit** — first as `multipart/form-data` (no CORS preflight), then as
    JSON. The JSON answer is parsed: `success:true` is a real delivery,
    `"needs Activation"` is reported as such instead of being called a success.
+   (This relay can only reach your inbox — it cannot mail the customer.)
 3. **No relay reachable** — the booking is **saved on the device**
    (`localStorage`) and re-sent automatically on the next visit, when the
    connection returns, or with the **Retry automatic send** button on the
@@ -39,6 +37,29 @@ reports **exactly** what happened — no guessing:
    * **WhatsApp / Call** — pre-filled with the reference, date and slot.
 
 Nothing is ever reported as "sent" unless a relay confirmed it.
+
+### 📄 The PDF receipt
+
+* On the confirmation screen the customer can **Download Official Receipt
+  (PDF)** — a branded A4 receipt with their reference, contact details, the
+  scheduled site-visit date/time, the lead engineer, and any selected
+  equipment package. It is generated on the fly in the browser by
+  `shared/bookingPdf.mjs` — no downloads library, works offline.
+* When Path B below is configured, the **same renderer** produces the copy
+  attached to the customer's thank-you mail, so the two always match.
+
+### ✉️ The customer confirmation mail
+
+With a working provider (Path B) the customer immediately receives a mail
+**from your company** titled
+
+> *Thank you {name} — Booking Confirmed [GM-SR-123456] — site visit on {date}*
+
+It states which team member visits, the date and time slot, the property
+address, what to keep ready, what happens next — and attaches the PDF receipt.
+The confirmation screen tells the customer the mail is on its way.
+
+Free kill switch: set `CUSTOMER_CONFIRMATION_EMAIL=off` and redeploy.
 
 ---
 
@@ -54,30 +75,50 @@ Nothing is ever reported as "sent" unless a relay confirmed it.
    **"Solar Booking Submitted Successfully!"** and the mail arrives.
 
 > The activation is tied to that exact address. If `COMPANY_INFO.email` is ever
-> changed in `src/data/solarData.js`, the new address needs its own activation.
+> changed in `frontend/data/solarData.js`, the new address needs its own activation.
 >
-> If the *Activate Form* mail never arrives at all, FormSubmit is not usable for
-> that inbox — use Path B.
+> FormSubmit can only mail **you** — the customer confirmation + PDF (Path B)
+> cannot work through it.
 
 ### Path B — permanent: send from your own mail account (recommended)
 
 Add the mail-provider variables on your host and every booking is sent from that
-provider — there is no activation link at all, and no third party between the
-visitor and your inbox.
+provider — there is no activation link at all. This is also what unlocks the
+**customer thank-you mail with the PDF receipt**.
 
-**Resend (easiest free option)**
+**Brevo (recommended, free 300 mails/day, works with your Gmail as sender)**
 
-1. Create a free account at <https://resend.com> → **API Keys** → *Create API Key*.
-2. Vercel → your project → **Settings → Environment Variables** → add:
-   * `RESEND_API_KEY` = the key you just created
-   * `MAIL_TO` = `contactgridmaster@gmail.com`
-   * `MAIL_FROM` = `Grid Master Website <onboarding@resend.dev>`
-3. **Redeploy** (Deployments → ⋯ → Redeploy) so the function picks the variables up.
-4. Submit a test booking — the confirmation screen says
-   *"E-mailed to contactgridmaster@gmail.com"* and mentions the `resend` relay.
+1. Create a free account at <https://brevo.com>.
+2. Verify your sender (one-time, so customer mails show your brand, not
+   "via brevo.com"):
+   **Senders, Domains & Dedicated IPs → Senders → Add a sender** → use your
+   Gmail address (e.g. `contactgridmaster@gmail.com`) and click the
+   verification link Brevo e-mails to it.
+3. Copy an API key: **SMTP & API → API Keys → Generate a new API key**.
+4. Vercel → your project → **Settings → Environment Variables** → add:
+   * `BREVO_API_KEY` = the key you just created
+   * `MAIL_FROM` = `Grid Master Solar Systems <contactgridmaster@gmail.com>`
+     (the address must be the verified sender from step 2)
+   * `MAIL_TO` = `contactgridmaster@gmail.com` (where booking notifications go)
+5. **Redeploy** (Deployments → ⋯ → Redeploy) so the function picks the variables up.
+6. Submit a test booking **with your own e-mail as the customer address**:
+   * your inbox gets the booking notification (from the `brevo` relay), and
+   * the customer address gets the thank-you mail **with the PDF receipt
+     attached** — check Spam the first time and mark it "Not spam".
 
-Netlify, Brevo, SendGrid, Web3Forms and generic webhook variants are documented
-inline in [`.env.example`](../.env.example).
+**Alternatives** (also cancel-capable of customer confirmations):
+
+* **Resend** — free 100 mails/day. The default `onboarding@resend.dev` sender
+  can only mail *your own* inbox; to reach customers you must add and verify a
+  domain you own in Resend first. Set `RESEND_API_KEY` + `MAIL_FROM`.
+* **SendGrid** — free 100 mails/day; verify a single sender under *Settings →
+  Sender Authentication*. Set `SENDGRID_API_KEY` + `MAIL_FROM`.
+* **Web3Forms** — `WEB3FORMS_KEY`: mails bookings to your inbox with zero
+  sender setup, but **cannot** e-mail the customer (no confirmation, no PDF).
+* **Any webhook** — `MAIL_WEBHOOK_URL`: receives the booking + rendered mail +
+  base64 PDF so you can forward it any way you like.
+
+All variables are documented inline in [`.env.example`](../.env.example).
 
 > Sanity check any time: open `/api/booking` on the deployed site. It answers
 > `{"success":false,"configured":false,...}` (HTTP 501) when no provider is set,
@@ -91,7 +132,7 @@ booking to a Google Sheet that you own.
 
 ---
 
-## 📬 Recovering bookings that were lost before this fix
+## 📬 Recovering bookings that were lost before the relay fix
 
 FormSubmit keeps every submission it received for **30 days**, even the ones it
 did not deliver, and exposes them through a free archive API (5 calls/day):
@@ -112,12 +153,29 @@ that sender always lands in the inbox.
 
 ---
 
-## Verifying the fix locally
+## Troubleshooting the customer confirmation
+
+The `/api/booking` answer carries a `customerMail` object so you can see
+exactly what happened (visible in the browser's Network tab after a booking):
+
+| `customerMail.status` | Meaning | Fix |
+| --------------------- | ------- | --- |
+| `sent` | Thank-you mail + PDF were handed to the provider | Nothing — check Spam on the customer side |
+| `failed` | The provider refused it (e.g. sender not verified) | Finish the sender verification for your provider (Path B, step 2) |
+| `unsupported` | Web3Forms is configured | It cannot mail customers — switch to Brevo/Resend/SendGrid |
+| `disabled` | `CUSTOMER_CONFIRMATION_EMAIL=off` | Remove the variable or set `on` |
+| `skipped` | No usable customer e-mail on the booking | The form already requires a valid e-mail |
+
+The booking notification to you is **never** blocked by a confirmation failure.
+
+---
+
+## Verifying everything locally
 
 ```bash
 npm install
 npm run dev          # http://localhost:3000  → Book Now → submit a test booking
-npm test             # booking-mail engine unit tests
+npm test             # booking-mail engine + PDF + confirmation unit tests
 npm run build
 ```
 
