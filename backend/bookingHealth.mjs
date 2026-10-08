@@ -196,6 +196,21 @@ export async function pingMailProvider({ env = {}, fetchImpl } = {}) {
       } catch { /* not needed */ }
       return { attempted: true, ok: true, provider: provider.name, accountEmail, note: 'The API key is valid and accepted.' };
     }
+    // Brevo answers 401 for a VALID key when the account's "Authorized IPs"
+    // lock is on and this host's IP isn't whitelisted — serverless hosts
+    // (Vercel, Netlify) rotate IPs, so the only cure is disabling the lock.
+    if (provider.name === 'brevo' && /unrecogni[sz]ed ip|authorised_ips|authorized ips/i.test(raw)) {
+      return {
+        attempted: true,
+        ok: false,
+        provider: provider.name,
+        status: res.status,
+        reason:
+          'The Brevo key is VALID, but your account\'s "Authorized IPs" security lock is blocking this server. ' +
+          'Serverless hosts (Vercel) call from thousands of rotating IPs, so whitelisting can never cover them. ' +
+          'Open https://app.brevo.com/security/authorised_ips and DISABLE IP authorization, wait a minute, then re-test this URL.',
+      };
+    }
     return {
       attempted: true,
       ok: false,

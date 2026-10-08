@@ -396,3 +396,20 @@ test('health endpoint reports which deployment and commit is answering', async (
   const body = JSON.parse(res.body);
   assert.deepEqual(body.deployment, { environment: 'preview', commit: 'abcdef1' });
 });
+
+test('mailtest gives the exact fix when Brevo blocks a valid key by IP', async () => {
+  const fetchMock = async () => ({
+    ok: false,
+    status: 401,
+    text: async () =>
+      '{"message":"We have detected you are using an unrecognised IP address 103.129.228.18. If you performed this action make sure to add the new IP address in this link: https://app.brevo.com/security/authorised_ips","code":"unauthorized"}',
+  });
+  const result = await pingMailProvider({
+    env: { BREVO_API_KEY: 'xkeysib-valid-but-ip-blocked' },
+    fetchImpl: fetchMock,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /Authorized IPs/);
+  assert.match(result.reason, /security\/authorised_ips/);
+  assert.match(result.reason, /VALID/);
+});

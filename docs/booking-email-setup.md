@@ -162,6 +162,7 @@ exactly what happened (visible in the browser's Network tab after a booking):
 | --------------------- | ------- | --- |
 | `sent` | Thank-you mail + PDF were handed to the provider | Nothing — check Spam on the customer side |
 | `failed` | The provider refused it (e.g. sender not verified) | Finish the sender verification for your provider (Path B, step 2) |
+| `failed` **and** your health page (`/api/booking-health?mailtest=1`) mentions "Authorized IPs" | Your Brevo account has the **Authorized IPs** lock on; Vercel calls from thousands of rotating IPs and can never be whitelisted | Open https://app.brevo.com/security/authorised_ips and **disable** IP authorization, wait a minute, re-test |
 | `unsupported` | Web3Forms is configured | It cannot mail customers — switch to Brevo/Resend/SendGrid |
 | `disabled` | `CUSTOMER_CONFIRMATION_EMAIL=off` | Remove the variable or set `on` |
 | `skipped` | No usable customer e-mail on the booking | The form already requires a valid e-mail |
