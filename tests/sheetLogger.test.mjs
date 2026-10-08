@@ -413,3 +413,18 @@ test('mailtest gives the exact fix when Brevo blocks a valid key by IP', async (
   assert.match(result.reason, /security\/authorised_ips/);
   assert.match(result.reason, /VALID/);
 });
+
+test('mailtest also recognizes Brevo verify-new-IP blocks', async () => {
+  const fetchMock = async () => ({
+    ok: false,
+    status: 401,
+    text: async () => '{"message":"Please verify a new IP address before making API calls","code":"unauthorized"}',
+  });
+  const result = await pingMailProvider({
+    env: { BREVO_API_KEY: 'xkeysib-valid-but-new-ip-gate' },
+    fetchImpl: fetchMock,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /IP security settings/);
+  assert.match(result.reason, /authorised_ips/);
+});

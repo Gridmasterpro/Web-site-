@@ -198,17 +198,18 @@ export async function pingMailProvider({ env = {}, fetchImpl } = {}) {
     }
     // Brevo answers 401 for a VALID key when the account's "Authorized IPs"
     // lock is on and this host's IP isn't whitelisted — serverless hosts
-    // (Vercel, Netlify) rotate IPs, so the only cure is disabling the lock.
-    if (provider.name === 'brevo' && /unrecogni[sz]ed ip|authorised_ips|authorized ips/i.test(raw)) {
+    // (Vercel, Netlify) rotate IPs on every redeploy/cold start, so the only
+    // cure is disabling the lock (and any "verify new IP" style gate).
+    if (provider.name === 'brevo' && /unrecogni[sz]ed ip|authorised_ips|authorized ips|verify a new ip|new ip (address )?(detected|verification)/i.test(raw)) {
       return {
         attempted: true,
         ok: false,
         provider: provider.name,
         status: res.status,
         reason:
-          'The Brevo key is VALID, but your account\'s "Authorized IPs" security lock is blocking this server. ' +
-          'Serverless hosts (Vercel) call from thousands of rotating IPs, so whitelisting can never cover them. ' +
-          'Open https://app.brevo.com/security/authorised_ips and DISABLE IP authorization, wait a minute, then re-test this URL.',
+          'The Brevo key is VALID, but your account\'s IP security settings (Authorized IPs / verify-new-IP) are blocking this server. ' +
+          'Vercel calls from thousands of rotating IPs — a new one after every redeploy — so whitelisting or verifying IPs one-by-one can never work. ' +
+          'Open https://app.brevo.com/security/authorised_ips and DISABLE IP authorization (behind "Security" → connection/IP settings), wait a minute, then re-test this URL.',
       };
     }
     return {
