@@ -42,7 +42,12 @@ export const FALLBACK_INBOX = 'contactgridmaster@gmail.com';
 export const QUEUE_KEY = 'grid-master-booking-queue';
 export const RELAY_PROBE_KEY = 'grid-master-relay-probe';
 
-const REQUEST_TIMEOUT_MS = 15000;
+// The booking function does real work before answering — build the PDF,
+// write the sheet row, hand two mails to the provider — and a cold serverless
+// start adds a few seconds more. 15 s proved far too tight in practice
+// ("The mail relay did not answer in time" on perfectly healthy backends);
+// give the whole round trip a comfortable margin instead.
+const REQUEST_TIMEOUT_MS = 45000;
 
 /** Delivery outcomes surfaced to the visitor. */
 export const DELIVERY = {

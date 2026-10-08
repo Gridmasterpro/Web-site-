@@ -279,7 +279,7 @@ export function resolveProvider(env = {}) {
 }
 
 /** Fetch with a hard timeout so a hanging provider never hangs the form. */
-async function withTimeout(fetchImpl, url, init, ms = 12000) {
+async function withTimeout(fetchImpl, url, init, ms = 9000) {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), ms) : null;
   try {
