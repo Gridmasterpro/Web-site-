@@ -693,20 +693,20 @@ For assistance, contact Head Engineer G. Goutham at ${COMPANY_INFO.directPhone}.
             </p>
 
             {delivered && delivery?.customerMail?.sent && (
-              <div className="max-w-lg mx-auto rounded-2xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 flex items-start gap-2.5">
+              <div className="max-w-lg mx-auto rounded-2xl border-2 border-emerald-500 bg-emerald-950 px-4 py-3 flex items-start gap-2.5 shadow-lg shadow-emerald-500/10">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
-                <p className="text-[11px] leading-relaxed text-emerald-200 text-left">
+                <p className="text-xs font-medium leading-relaxed text-emerald-100 text-left">
                   We've e-mailed your booking confirmation and the official PDF receipt to{" "}
-                  <strong className="text-emerald-100">{customerEmail}</strong> — it states the
-                  team member visiting you on <strong className="text-emerald-100">{date}</strong>{" "}
-                  during <strong className="text-emerald-100">{timeSlot}</strong>.
+                  <strong className="text-white">{customerEmail}</strong> — it states the
+                  team member visiting you on <strong className="text-white">{date}</strong>{" "}
+                  during <strong className="text-white">{timeSlot}</strong>.
                 </p>
               </div>
             )}
 
             {!delivered && (
-              <div className="max-w-lg mx-auto rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 text-left space-y-3">
-                <p className="text-xs text-amber-200 leading-relaxed">{diagnosis()}</p>
+              <div className="max-w-lg mx-auto rounded-2xl border-2 border-amber-500/60 bg-amber-950/80 p-4 text-left space-y-3">
+                <p className="text-xs font-medium text-amber-100 leading-relaxed">{diagnosis()}</p>
 
                 <div className="flex flex-col sm:flex-row gap-3">
                   <a
@@ -757,7 +757,7 @@ For assistance, contact Head Engineer G. Goutham at ${COMPANY_INFO.directPhone}.
                     href="https://mail.google.com/mail/u/0/#search/formsubmit"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-[11px] text-amber-300 hover:text-amber-200 underline"
+                    className="inline-flex items-center gap-1.5 text-[11px] text-amber-200 hover:text-amber-100 underline"
                   >
                     <ExternalLink className="w-3 h-3" />
                     <span>Open the inbox to approve the mail relay (one-time, 30 seconds)</span>
