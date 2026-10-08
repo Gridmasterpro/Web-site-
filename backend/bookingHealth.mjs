@@ -20,9 +20,11 @@
  * confirm the two match without either value ever being shown.
  */
 
-import { fingerprint, inspectWebhookUrl, pingSheet, redactWebhookUrl } from './sheetLogger.mjs';
+import { fingerprint, inspectWebhookUrl, logBookingToSheet, pingSheet, redactWebhookUrl } from './sheetLogger.mjs';
 import { DEFAULT_FROM, DEFAULT_INBOX, resolveProvider, sendBookingMail } from './mailProvider.mjs';
-import { customerConfirmationEnabled } from './confirmationMail.mjs';
+import { customerConfirmationEnabled, sendCustomerConfirmationMail } from './confirmationMail.mjs';
+import { bookingPayloadToReceiptModel } from '../shared/receiptModel.mjs';
+import { buildBookingReceiptPdf } from '../shared/bookingPdf.mjs';
 
 const asText = (value) => (value === undefined || value === null ? '' : String(value));
 
@@ -30,6 +32,7 @@ const asText = (value) => (value === undefined || value === null ? '' : String(v
 const selfTestHits = [];
 const mailTestHits = [];
 const sendTestHits = [];
+const fullTestHits = [];
 const SELF_TEST_WINDOW_MS = 30 * 1000;
 
 function throttled(hits, now = Date.now()) {
@@ -97,7 +100,7 @@ export function describeConfiguration(env = {}) {
       customerConfirmation: customerConfirmationEnabled(env) ? 'on' : 'off',
       providerKey: keyVar ? { variable: keyVar, ...describeSecret(env[keyVar]) } : { variable: null, set: false },
       note: provider.configured
-        ? 'Booking e-mails AND customer thank-you confirmations are sent from this host. Add ?mailtest=1 to verify the API key (read-only). Add ?sendtest=1 to send ONE test booking mail to the company inbox through the exact production path.'
+        ? 'Booking e-mails AND customer thank-you confirmations are sent from this host. Add ?mailtest=1 to verify the API key (read-only); ?sendtest=1 to send ONE test mail; ?fulltest=1 to run all four booking stages (PDF + sheet row + both mails).'
         : 'No MAIL_* variables set — bookings fall back to FormSubmit for e-mail (which can only reach the company inbox, never the customer). This does NOT affect sheet logging.',
     },
   };
@@ -155,6 +158,100 @@ export function summarise(config, selftest) {
  * way to tell an invalid-key problem apart from an unverified-sender one.
  */
 const BREVO_IP_GATE = /unrecogni[sz]ed ip|authorised_ips|authorized ips|verify a new ip|new ip (address )?(detected|verification)/i;
+
+/**
+ * Run THE COMPLETE production pipeline a real booking runs — build the PDF
+ * receipt, WRITE one clearly-marked row into the sheet, send the company
+ * notification, and send the customer confirmation (with the PDF attached)
+ * — then report every stage's verdict. This is the one diagnostic that can
+ * answer "mails work in ?sendtest=1 but real bookings fail" mysteries,
+ * because it exercises the two things only real bookings do (PDF build,
+ * sheet write) plus both mails.
+ *
+ * Side effects, all labelled HEALTH-CHECK: one sheet row + up to two mails,
+ * always addressed to the company inbox — never to a stranger. Throttled.
+ */
+export async function runFullPipelineDiagnosis({ env = {}, fetchImpl } = {}) {
+  const provider = resolveProvider(env);
+  const to = provider.to || DEFAULT_INBOX;
+  const sample = {
+    form_name: 'Grid Master health fulltest',
+    customer_name: 'HEALTH-CHECK full test (not a customer)',
+    customer_email: to,
+    customer_phone: '0000000000',
+    service_type: 'Diagnostics — full booking pipeline',
+    booking_reference: 'GM-SR-HEALTH-CHK',
+    purpose: 'Diagnostics',
+    property_location: 'n/a',
+    preferred_date: 'n/a',
+    preferred_slot: 'n/a',
+    details:
+      'Artificial booking created by /api/booking-health?fulltest=1 to prove every stage of the real booking ' +
+      'pipeline. The sheet row and the mails are marked HEALTH-CHECK and can be ignored or deleted.',
+  };
+
+  const stages = {};
+
+  // Stage 1 — PDF receipt: the exact builder real bookings execute. Heavy,
+  // and the ONE thing ?sendtest=1 does not cover.
+  try {
+    const model = bookingPayloadToReceiptModel(sample);
+    const pdf = buildBookingReceiptPdf(model);
+    const bytes = typeof pdf === 'string' ? pdf.length : (pdf?.byteLength ?? pdf?.length ?? 0);
+    stages.pdf = { ok: true, bytes };
+  } catch (error) {
+    stages.pdf = { ok: false, error: error?.message || String(error) };
+  }
+
+  // Stage 2 — Sheet WRITE: pings prove reachability; only this proves an
+  // actual row lands. The row is marked so it can be deleted afterwards.
+  try {
+    const logged = await logBookingToSheet({ booking: sample, env, fetchImpl, clientIp: 'health-fulltest' });
+    stages.sheetWrite = {
+      attempted: true,
+      ok: logged?.ok === true,
+      ...(logged?.error ? { error: logged.error } : {}),
+      ...(logged?.ok ? { note: 'One row marked HEALTH-CHECK was appended — delete it from the sheet afterwards.' } : {}),
+    };
+  } catch (error) {
+    stages.sheetWrite = { attempted: true, ok: false, error: error?.message || String(error) };
+  }
+
+  // Stage 3 — Company booking mail through the production path.
+  const company = await sendBookingMail({ booking: sample, env, fetchImpl });
+  stages.companyMail = {
+    attempted: provider.configured,
+    ok: company?.ok === true,
+    provider: provider.name,
+    to,
+    ...(company?.error ? { error: company.error } : {}),
+  };
+
+  // Stage 4 — Customer confirmation WITH the generated PDF attached, also
+  // addressed to the company inbox so diagnosis never e-mails strangers.
+  const confirmation = await sendCustomerConfirmationMail({ booking: sample, env, fetchImpl }).catch((error) => ({
+    ok: false,
+    provider: provider.name,
+    error: error?.message || String(error),
+  }));
+  stages.customerMail = {
+    attempted: provider.configured,
+    ok: confirmation?.ok === true,
+    provider: provider.name,
+    to,
+    ...(confirmation?.error ? { error: confirmation.error } : {}),
+    ...(confirmation?.reason ? { reason: confirmation.reason } : {}),
+  };
+
+  const ok = Boolean(stages.pdf.ok && stages.sheetWrite.ok && stages.companyMail.ok && stages.customerMail.ok);
+  return {
+    ok,
+    note: ok
+      ? 'All four stages of a real booking succeeded: PDF built, sheet row written, company mail accepted, customer confirmation (with PDF) accepted. The pipeline is healthy end-to-end.'
+      : 'At least one stage failed — the stages below name exactly which one and why (pdf = receipt builder, sheetWrite = the marked test row, companyMail/customerMail = the two mails).',
+    stages,
+  };
+}
 
 /**
  * Send ONE test booking e-mail to the company inbox (MAIL_TO) through the
@@ -307,6 +404,7 @@ export async function handleBookingHealthRequest(event, { env = {}, fetchImpl } 
   const wantsSelfTest = flagOn(query.selftest);
   const wantsMailTest = flagOn(query.mailtest);
   const wantsSendTest = flagOn(query.sendtest);
+  const wantsFullTest = flagOn(query.fulltest);
 
   const configuration = describeConfiguration(env);
 
@@ -349,6 +447,19 @@ export async function handleBookingHealthRequest(event, { env = {}, fetchImpl } 
     }
   }
 
+  let fulltest = null;
+  if (wantsFullTest) {
+    if (throttled(fullTestHits)) {
+      fulltest = { attempted: false, ok: false, reason: 'Full pipeline test is throttled — wait 30 seconds and retry.' };
+    } else {
+      fulltest = await runFullPipelineDiagnosis({ env, fetchImpl }).catch((error) => ({
+        attempted: true,
+        ok: false,
+        reason: error?.message || String(error),
+      }));
+    }
+  }
+
   const verdict = summarise(configuration, selftest);
 
   return json(200, {
@@ -366,6 +477,7 @@ export async function handleBookingHealthRequest(event, { env = {}, fetchImpl } 
     selftest,
     mailtest,
     sendtest,
+    fulltest,
     docs: 'docs/customer-bookings-sheet-setup.md',
   });
 }

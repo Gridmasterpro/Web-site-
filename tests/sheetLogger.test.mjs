@@ -472,3 +472,48 @@ test('sendtest is not attempted without the parameter', async () => {
   const body = JSON.parse(res.body);
   assert.equal(body.sendtest, null);
 });
+
+test('fulltest exercises all four booking stages (PDF, sheet write, both mails) and succeeds when every one does', async () => {
+  const fetchMock = async (url) => {
+    if (String(url).includes('script.google.com')) {
+      return { ok: true, status: 200, text: async () => '{"ok":true,"mode":"write","row":23}' };
+    }
+    return { ok: true, status: 201, text: async () => '{"messageId":"<ok>"}' };
+  };
+  const res = await handleBookingHealthRequest(
+    { httpMethod: 'GET', queryStringParameters: { fulltest: '1' } },
+    {
+      env: { BREVO_API_KEY: 'xkeysib-fulltest', GOOGLE_SHEETS_WEBHOOK_URL: 'https://script.google.com/macros/s/AID/exec', GOOGLE_SHEETS_SECRET: 's' },
+      fetchImpl: fetchMock,
+    }
+  );
+  const body = JSON.parse(res.body);
+  assert.equal(body.fulltest.ok, true);
+  assert.equal(body.fulltest.stages.pdf.ok, true);
+  assert.ok(body.fulltest.stages.pdf.bytes > 500);
+  assert.equal(body.fulltest.stages.sheetWrite.ok, true);
+  assert.equal(body.fulltest.stages.companyMail.ok, true);
+  assert.equal(body.fulltest.stages.customerMail.ok, true);
+});
+
+test('fulltest pinpoints the failing stage without blaming the healthy ones', async () => {
+  const fetchMock = async (url) => {
+    if (String(url).includes('script.google.com')) {
+      return { ok: true, status: 200, text: async () => '{"ok":false,"error":"Simulated sheet refusal"}' };
+    }
+    return { ok: true, status: 201, text: async () => '{"messageId":"<ok>"}' };
+  };
+  const res = await handleBookingHealthRequest(
+    { httpMethod: 'GET', queryStringParameters: { fulltest: '1' } },
+    {
+      env: { BREVO_API_KEY: 'xkeysib-fulltest', GOOGLE_SHEETS_WEBHOOK_URL: 'https://script.google.com/macros/s/AID/exec', GOOGLE_SHEETS_SECRET: 's' },
+      fetchImpl: fetchMock,
+    }
+  );
+  const body = JSON.parse(res.body);
+  assert.equal(body.fulltest.ok, false);
+  assert.equal(body.fulltest.stages.sheetWrite.ok, false);
+  assert.match(body.fulltest.stages.sheetWrite.error, /Simulated sheet refusal/);
+  assert.equal(body.fulltest.stages.companyMail.ok, true);
+  assert.equal(body.fulltest.stages.pdf.ok, true);
+});
