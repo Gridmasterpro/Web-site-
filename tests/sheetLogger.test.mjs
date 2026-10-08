@@ -428,3 +428,47 @@ test('mailtest also recognizes Brevo verify-new-IP blocks', async () => {
   assert.match(result.reason, /IP security settings/);
   assert.match(result.reason, /authorised_ips/);
 });
+
+test('sendtest sends one sample booking mail to the company inbox and reports success', async () => {
+  let sentBody = '';
+  const fetchMock = async (url, init) => {
+    if (String(url).includes('smtp/email')) sentBody = init.body;
+    return { ok: true, status: 201, text: async () => '{"messageId":"<ok>"}' };
+  };
+  const res = await handleBookingHealthRequest(
+    { httpMethod: 'GET', queryStringParameters: { sendtest: '1' } },
+    { env: { BREVO_API_KEY: 'xkeysib-sendtest-ok' }, fetchImpl: fetchMock }
+  );
+  const body = JSON.parse(res.body);
+  assert.equal(body.sendtest.ok, true);
+  assert.equal(body.sendtest.provider, 'brevo');
+  assert.equal(body.sendtest.to, 'contactgridmaster@gmail.com');
+  const payload = JSON.parse(sentBody);
+  assert.equal(payload.to[0].email, 'contactgridmaster@gmail.com');
+  assert.match(payload.subject, /GM-SR-TEST/);
+});
+
+test('sendtest explains when Brevo accepts reads but refuses the send by IP', async () => {
+  const fetchMock = async () => ({
+    ok: false,
+    status: 401,
+    text: async () => '{"message":"We have detected you are using an unrecognised IP address 203.0.113.9","code":"unauthorized"}',
+  });
+  const res = await handleBookingHealthRequest(
+    { httpMethod: 'GET', queryStringParameters: { sendtest: '1' } },
+    { env: { BREVO_API_KEY: 'xkeysib-sendtest-ipgate' }, fetchImpl: fetchMock }
+  );
+  const body = JSON.parse(res.body);
+  assert.equal(body.sendtest.ok, false);
+  assert.match(body.sendtest.reason, /refused the SEND/);
+  assert.match(body.sendtest.reason, /Authorize/);
+});
+
+test('sendtest is not attempted without the parameter', async () => {
+  const res = await handleBookingHealthRequest(
+    { httpMethod: 'GET', queryStringParameters: {} },
+    { env: { BREVO_API_KEY: 'x' }, fetchImpl: async () => { throw new Error('must not be called'); } }
+  );
+  const body = JSON.parse(res.body);
+  assert.equal(body.sendtest, null);
+});

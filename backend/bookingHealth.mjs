@@ -21,7 +21,7 @@
  */
 
 import { fingerprint, inspectWebhookUrl, pingSheet, redactWebhookUrl } from './sheetLogger.mjs';
-import { DEFAULT_FROM, DEFAULT_INBOX, resolveProvider } from './mailProvider.mjs';
+import { DEFAULT_FROM, DEFAULT_INBOX, resolveProvider, sendBookingMail } from './mailProvider.mjs';
 import { customerConfirmationEnabled } from './confirmationMail.mjs';
 
 const asText = (value) => (value === undefined || value === null ? '' : String(value));
@@ -29,6 +29,7 @@ const asText = (value) => (value === undefined || value === null ? '' : String(v
 // Light throttle so the public self-test cannot be hammered.
 const selfTestHits = [];
 const mailTestHits = [];
+const sendTestHits = [];
 const SELF_TEST_WINDOW_MS = 30 * 1000;
 
 function throttled(hits, now = Date.now()) {
@@ -96,7 +97,7 @@ export function describeConfiguration(env = {}) {
       customerConfirmation: customerConfirmationEnabled(env) ? 'on' : 'off',
       providerKey: keyVar ? { variable: keyVar, ...describeSecret(env[keyVar]) } : { variable: null, set: false },
       note: provider.configured
-        ? 'Booking e-mails AND customer thank-you confirmations are sent from this host. Add ?mailtest=1 to this URL to verify the API key live (read-only, sends nothing).'
+        ? 'Booking e-mails AND customer thank-you confirmations are sent from this host. Add ?mailtest=1 to verify the API key (read-only). Add ?sendtest=1 to send ONE test booking mail to the company inbox through the exact production path.'
         : 'No MAIL_* variables set — bookings fall back to FormSubmit for e-mail (which can only reach the company inbox, never the customer). This does NOT affect sheet logging.',
     },
   };
@@ -153,6 +154,70 @@ export function summarise(config, selftest) {
  * account" endpoint, sends no e-mail, writes nothing. This is the fastest
  * way to tell an invalid-key problem apart from an unverified-sender one.
  */
+const BREVO_IP_GATE = /unrecogni[sz]ed ip|authorised_ips|authorized ips|verify a new ip|new ip (address )?(detected|verification)/i;
+
+/**
+ * Send ONE test booking e-mail to the company inbox (MAIL_TO) through the
+ * exact production send path — this is what /api/booking does, minus the
+ * customer confirmation. Returns the provider's precise answer so a
+ * "config looks right but mail never arrives" mystery becomes one readable
+ * line. Never throws.
+ */
+export async function sendSampleBookingMail({ env = {}, fetchImpl } = {}) {
+  const provider = resolveProvider(env);
+  if (!provider.configured) {
+    return { attempted: false, ok: false, provider: 'none', reason: 'No mail provider configured on this host.' };
+  }
+  const sample = {
+    form_name: 'Grid Master health send-test',
+    customer_name: 'Health send-test (not a customer)',
+    customer_email: provider.to,
+    customer_phone: '0000000000',
+    service_type: 'Booking mail self-test',
+    booking_reference: 'GM-SR-TEST',
+    purpose: 'Diagnostics',
+    property_location: 'n/a',
+    preferred_date: 'n/a',
+    preferred_slot: 'n/a',
+    details:
+      'This test mail was sent by /api/booking-health?sendtest=1 through the exact booking ' +
+      'pipeline. If it reached the company inbox, booking e-mails work end-to-end.',
+  };
+  const result = await sendBookingMail({ booking: sample, env, fetchImpl });
+  if (result.ok) {
+    return {
+      attempted: true,
+      ok: true,
+      provider: provider.name,
+      to: provider.to,
+      status: result.status,
+      note: 'A test booking e-mail was accepted by the provider — it should land in the company inbox within seconds. If it does, booking mails work end-to-end.',
+    };
+  }
+  if (provider.name === 'brevo' && BREVO_IP_GATE.test(result.error || '')) {
+    return {
+      attempted: true,
+      ok: false,
+      provider: provider.name,
+      to: provider.to,
+      status: result.status,
+      reason:
+        'Brevo accepted your key for READING but refused the SEND from this server\'s IP. ' +
+        'Brevo Security → Authorized IPs: open the "Unauthorized IP addresses" tab, Select All → ' +
+        'Authorize (Vercel rotates IPs), and keep the API-keys/SMTP-keys blocking toggles Deactivated. ' +
+        `Raw answer: ${result.error}`,
+    };
+  }
+  return {
+    attempted: true,
+    ok: false,
+    provider: provider.name,
+    to: provider.to,
+    status: result.status,
+    reason: result.error || 'The send failed without details.',
+  };
+}
+
 export async function pingMailProvider({ env = {}, fetchImpl } = {}) {
   const provider = resolveProvider(env);
   if (!provider.configured) {
@@ -241,6 +306,7 @@ export async function handleBookingHealthRequest(event, { env = {}, fetchImpl } 
   const flagOn = (value) => ['1', 'true', 'yes'].includes(asText(value).toLowerCase());
   const wantsSelfTest = flagOn(query.selftest);
   const wantsMailTest = flagOn(query.mailtest);
+  const wantsSendTest = flagOn(query.sendtest);
 
   const configuration = describeConfiguration(env);
 
@@ -270,6 +336,19 @@ export async function handleBookingHealthRequest(event, { env = {}, fetchImpl } 
     }
   }
 
+  let sendtest = null;
+  if (wantsSendTest) {
+    if (throttled(sendTestHits)) {
+      sendtest = { attempted: false, ok: false, reason: 'Send test is throttled — wait 30 seconds and retry.' };
+    } else {
+      sendtest = await sendSampleBookingMail({ env, fetchImpl }).catch((error) => ({
+        attempted: true,
+        ok: false,
+        reason: error?.message || String(error),
+      }));
+    }
+  }
+
   const verdict = summarise(configuration, selftest);
 
   return json(200, {
@@ -286,6 +365,7 @@ export async function handleBookingHealthRequest(event, { env = {}, fetchImpl } 
     configuration,
     selftest,
     mailtest,
+    sendtest,
     docs: 'docs/customer-bookings-sheet-setup.md',
   });
 }
